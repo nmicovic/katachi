@@ -1,0 +1,1 @@
+::: katachi.foo
