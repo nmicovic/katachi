@@ -1,0 +1,7 @@
+# This is a semantical name - not the real directory name
+name: dataset_root
+type: directory
+children:
+  - name: image_item
+    type: file
+    extension: jpg

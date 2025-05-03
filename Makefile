@@ -4,6 +4,7 @@ install: ## Install the virtual environment and install the pre-commit hooks
 	@uv sync
 	@uv run pre-commit install
 
+
 .PHONY: check
 check: ## Run code quality tools.
 	@echo "🚀 Checking lock file consistency with 'pyproject.toml'"
@@ -19,6 +20,14 @@ check: ## Run code quality tools.
 test: ## Test the code with pytest
 	@echo "🚀 Testing code: Running pytest"
 	@uv run python -m pytest --cov --cov-config=pyproject.toml --cov-report=xml
+
+.PHONY: schema-test
+schema-test: ## Run schema validation tests
+	@echo "🚀 Running schema validation tests"
+	@uv run python -m pytest tests/test_schema_validation.py -v
+	@echo "🚀 Running CLI validation commands"
+	@uv run python -m katachi validate "tests/schema_tests/test_sanity/schema.yaml" "tests/schema_tests/test_sanity/dataset"
+	@uv run python -m katachi validate "tests/schema_tests/test_depth_1/schema.yaml" "tests/schema_tests/test_depth_1/dataset"
 
 .PHONY: build
 build: clean-build ## Build wheel file

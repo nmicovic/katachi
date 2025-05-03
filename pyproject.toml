@@ -18,6 +18,7 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "pyyaml>=6.0.2",
     "typer>=0.15.3",
 ]
 
@@ -25,6 +26,9 @@ dependencies = [
 Homepage = "https://nmicovic.github.io/katachi/"
 Repository = "https://github.com/nmicovic/katachi"
 Documentation = "https://nmicovic.github.io/katachi/"
+
+[project.scripts]
+katachi = "katachi.cli:app"
 
 [dependency-groups]
 dev = [

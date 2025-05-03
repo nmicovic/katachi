@@ -1,0 +1,12 @@
+name: dataset
+type: directory
+description: A dataset with a depth of 3
+children:
+  - name: timestamp
+    type: directory
+    description: Data reprensetationf or the data in format dd.mm.yyyy
+    children:
+      - name: img_item
+        type: file
+        extension: jpg
+        description: An image jpg file

@@ -367,6 +367,7 @@ name = "katachi"
 version = "0.0.1"
 source = { editable = "." }
 dependencies = [
+    { name = "pyyaml" },
     { name = "typer" },
 ]
 
@@ -385,7 +386,10 @@ dev = [
 ]
 
 [package.metadata]
-requires-dist = [{ name = "typer", specifier = ">=0.15.3" }]
+requires-dist = [
+    { name = "pyyaml", specifier = ">=6.0.2" },
+    { name = "typer", specifier = ">=0.15.3" },
+]
 
 [package.metadata.requires-dev]
 dev = [
