@@ -1,12 +1,12 @@
-name: dataset
+semantical_name: dataset
 type: directory
 description: A dataset with a depth of 3
 children:
-  - name: timestamp
+  - semantical_name: timestamp
     type: directory
     description: Data reprensetationf or the data in format dd.mm.yyyy
     children:
-      - name: img_item
+      - semantical_name: img_item
         type: file
-        extension: jpg
+        extension: .jpg
         description: An image jpg file

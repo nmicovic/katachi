@@ -23,8 +23,8 @@ test: ## Test the code with pytest
 
 .PHONY: schema-test
 schema-test: ## Run schema validation tests
-	@echo "🚀 Running schema validation tests"
-	@uv run python -m pytest tests/test_schema_validation.py -v
+	# @echo "🚀 Running schema validation tests"
+	# @uv run python -m pytest tests/test_schema_validation.py -v
 	@echo "🚀 Running CLI validation commands"
 	@uv run python -m katachi validate "tests/schema_tests/test_sanity/schema.yaml" "tests/schema_tests/test_sanity/dataset"
 	@uv run python -m katachi validate "tests/schema_tests/test_depth_1/schema.yaml" "tests/schema_tests/test_depth_1/dataset"
