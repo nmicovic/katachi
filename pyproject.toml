@@ -116,4 +116,3 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["src"]
-
