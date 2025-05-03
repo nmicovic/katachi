@@ -15,7 +15,7 @@ plugins:
   - mkdocstrings:
       handlers:
         python:
-          paths: ["src/katachi"]
+          paths: ["src"]
 theme:
   name: material
   feature:
