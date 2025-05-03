@@ -6,6 +6,10 @@
 [![Commit activity](https://img.shields.io/github/commit-activity/m/nmicovic/katachi)](https://img.shields.io/github/commit-activity/m/nmicovic/katachi)
 [![License](https://img.shields.io/github/license/nmicovic/katachi)](https://img.shields.io/github/license/nmicovic/katachi)
 
+<div align="center">
+  <img src="logo.png" alt="Logo" width="300"/>
+</div>
+
 Python package for validating, processing and parsing directories.
 
 - **Github repository**: <https://github.com/nmicovic/katachi/>
