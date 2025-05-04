@@ -1,7 +1,9 @@
 # This is a semantical name - not the real directory name
 semantical_name: dataset_root
+pattern_name: dataset
 type: directory
 children:
   - semantical_name: image_item
+    pattern_name: "img\\d+"
     type: file
     extension: .jpg

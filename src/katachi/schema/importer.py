@@ -74,20 +74,29 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
         return None
 
     node_type = node_data.get("type", "").lower()
-    name = node_data.get("name", "")
+    semantical_name = node_data.get("semantical_name", "")
     description = node_data.get("description")
+    pattern_name = node_data.get("pattern_name")
 
     # For root node, use parent_path directly instead of appending the name
     # This makes the validation work with the actual directory structure
-    node_path = parent_path if is_root else parent_path / name if name else parent_path
+    node_path = parent_path if is_root else parent_path / semantical_name if semantical_name else parent_path
 
     if node_type == "file":
         # Create a file node with its extension
         extension = node_data.get("extension", "")
-        return SchemaFile(path=node_path, semantical_name=name, extension=extension, description=description)
+        return SchemaFile(
+            path=node_path,
+            semantical_name=semantical_name,
+            extension=extension,
+            description=description,
+            pattern_validation=pattern_name,
+        )
     elif node_type == "directory":
         # Create a directory node
-        directory = SchemaDirectory(path=node_path, semantical_name=name, description=description)
+        directory = SchemaDirectory(
+            path=node_path, semantical_name=semantical_name, description=description, pattern_validation=pattern_name
+        )
 
         # Parse children recursively if they exist
         children = node_data.get("children", [])

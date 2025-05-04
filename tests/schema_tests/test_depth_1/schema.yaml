@@ -1,12 +1,15 @@
 semantical_name: dataset
+pattern_name: dataset
 type: directory
 description: A dataset with a depth of 3
 children:
   - semantical_name: timestamp
+    pattern_name: "\\b(\\d{2})\\.(\\d{2})\\.(\\d{4})\\b"
     type: directory
-    description: Data reprensetationf or the data in format dd.mm.yyyy
+    description: Data representation or the data in format dd.mm.yyyy
     children:
       - semantical_name: img_item
         type: file
+        pattern_name: "img\\d+"
         extension: .jpg
         description: An image jpg file

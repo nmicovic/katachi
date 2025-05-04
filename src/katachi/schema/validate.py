@@ -15,6 +15,11 @@ def validate_schema(schema: SchemaNode, target_path: Path) -> bool:
             logging.error(f"Validation failed! schema: {schema} : {target_path} is not a directory")
             return False
 
+        # regexp pattern matching
+        if schema.pattern_validation and not schema.pattern_validation.fullmatch(target_path.name):
+            logging.error(f"Validation failed! schema: {schema} : {target_path} does not match pattern")
+            return False
+
         child_paths = list(target_path.iterdir())
         logging.debug(f"[schema_parse] child_paths: {child_paths}")
 
@@ -52,6 +57,9 @@ def _validate_file(schema: SchemaFile, file_path: Path) -> bool:
         logging.error(f"Validation failed! schema: {schema} : {file_path} has wrong extension")
         return False
 
-    # TODO Add file name pattern validation
+    # regexp pattern matching
+    if schema.pattern_validation and not schema.pattern_validation.fullmatch(file_path.stem):
+        logging.error(f"Validation failed! schema: {schema} : {file_path} does not match pattern")
+        return False
 
     return True
