@@ -2,7 +2,7 @@
 name = "katachi"
 version = "0.0.1"
 description = "Python package for validating, processing and parsing directories."
-authors = [{ name = "Nemanja Micovic", email = "contact.nmicovic@gmail.com" }]
+authors = [{ name = "Nemanja Micovic", email = "contact.nmicovic@protonmail.com" }]
 readme = "README.md"
 keywords = ['python']
 requires-python = ">=3.9,<4.0"
