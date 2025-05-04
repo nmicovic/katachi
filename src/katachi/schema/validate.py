@@ -1,65 +1,70 @@
 import logging
 from pathlib import Path
 
-from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode
+from katachi.schema.schema_node import SchemaDirectory, SchemaNode
+from katachi.validation.core import ValidationReport, ValidatorRegistry
+from katachi.validation.validators import SchemaValidator
 
 
-def validate_schema(schema: SchemaNode, target_path: Path) -> bool:
+def validate_schema(schema: SchemaNode, target_path: Path) -> ValidationReport:
+    """
+    Validate a target path against a schema node recursively.
+
+    Args:
+        schema: Schema node to validate against
+        target_path: Path to validate
+
+    Returns:
+        ValidationReport with all validation results
+    """
     logging.debug(f"[schema_parse] <{schema.semantical_name}> @ {target_path}")
-    if isinstance(schema, SchemaDirectory):
-        # Perform basics checks for directory which are simple.
-        # The real challenge is in validating children.
 
-        # is it a dir?
-        if not target_path.is_dir():
-            logging.error(f"Validation failed! schema: {schema} : {target_path} is not a directory")
-            return False
+    # Create a report to collect validation results
+    report = ValidationReport()
 
-        # regexp pattern matching
-        if schema.pattern_validation and not schema.pattern_validation.fullmatch(target_path.name):
-            logging.error(f"Validation failed! schema: {schema} : {target_path} does not match pattern")
-            return False
+    # Run standard validation for this node
+    node_report = SchemaValidator.validate_node(schema, target_path)
+    report.add_results(node_report.results)
 
+    # Run any custom validators
+    custom_results = ValidatorRegistry.run_validators(schema, target_path)
+    report.add_results(custom_results)
+
+    # Early return if basic validation fails
+    if not node_report.is_valid():
+        return report
+
+    # For directories, validate children
+    if isinstance(schema, SchemaDirectory) and target_path.is_dir():
         child_paths = list(target_path.iterdir())
-        logging.debug(f"[schema_parse] child_paths: {child_paths}")
+        # logging.debug(f"[schema_parse] child_paths: {child_paths}")
 
         for child_path in child_paths:
-            status = False
+            child_valid = False
+            child_reports = []
 
-            # TODO other validations - probably pattern matching for name etc...
             for child in schema.children:
-                if isinstance(child, SchemaFile):
-                    status = _validate_file(child, child_path)
-                else:
-                    status = validate_schema(child, child_path)
+                child_report = validate_schema(child, child_path)
+                child_reports.append(child_report)
 
-            if not status:
-                logging.error(f"Validation failed! schema: {schema} : {child} failed validation")
-                return False
+                # If we verified the child successfully, we can report the results and stop checking othe cchildren.
+                if child_report.is_valid():
+                    child_valid = True
+                    report.add_results(child_report.results)
+                    break
 
-        return True
-    elif isinstance(schema, SchemaFile):
-        return _validate_file(schema, target_path)
-    else:
-        logging.error(f"Validation failed! schema: {schema} : Unknown schema type")
-        return False
+            # If we failed to validate a path with any child, we need to log the results of what we tried
+            # for better undeerstanding of the failure. We may have tried multiple node childs for validation,
+            # hence we must add all results as well.
+            # This is important for the case where we have multiple children with different validation rules.
+            if not child_valid:
+                for child_report in child_reports:
+                    for result in child_report.results:
+                        report.add_result(result)
+
+    return report
 
 
-def _validate_file(schema: SchemaFile, file_path: Path) -> bool:
-    logging.debug(f"[schema_parse] <{schema.semantical_name}> @ {file_path}")
-    # is it a file?
-    if not file_path.is_file():
-        logging.error(f"Validation failed! schema: {schema} : {file_path} is not a file")
-        return False
-
-    # validate extension
-    if schema.extension and file_path.suffix != schema.extension:
-        logging.error(f"Validation failed! schema: {schema} : {file_path} has wrong extension")
-        return False
-
-    # regexp pattern matching
-    if schema.pattern_validation and not schema.pattern_validation.fullmatch(file_path.stem):
-        logging.error(f"Validation failed! schema: {schema} : {file_path} does not match pattern")
-        return False
-
-    return True
+def format_validation_results(report: ValidationReport) -> str:
+    """Format validation results into a user-friendly message."""
+    return report.format_report()

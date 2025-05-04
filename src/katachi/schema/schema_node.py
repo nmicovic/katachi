@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from re import Pattern
 from re import compile as re_compile
-from typing import Optional
+from typing import Any, Optional
 
 
 class SchemaNode(ABC):
@@ -19,6 +19,7 @@ class SchemaNode(ABC):
         semantical_name: str,
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize a schema node.
@@ -27,11 +28,14 @@ class SchemaNode(ABC):
             path: Path to this node
             semantical_name: The semantic name of this node in the schema
             description: Optional description of the node
+            pattern_validation: Optional regex pattern for name validation
+            metadata: Optional metadata for custom validations
         """
         self.path: Path = path
         self.semantical_name: str = semantical_name
         self.description: Optional[str] = description
         self.pattern_validation: Optional[Pattern] = None
+        self.metadata: dict[str, Any] = metadata or {}
 
         if pattern_validation:
             self.pattern_validation = re_compile(pattern_validation)
@@ -67,6 +71,7 @@ class SchemaFile(SchemaNode):
         extension: str,
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize a schema file node.
@@ -76,8 +81,10 @@ class SchemaFile(SchemaNode):
             semantical_name: The semantic name of this file in the schema
             extension: The file extension
             description: Optional description of the file
+            pattern_validation: Optional regex pattern for name validation
+            metadata: Optional metadata for custom validations
         """
-        super().__init__(path, semantical_name, description, pattern_validation)
+        super().__init__(path, semantical_name, description, pattern_validation, metadata)
         self.extension: str = extension
 
     def get_type(self) -> str:
@@ -100,6 +107,7 @@ class SchemaDirectory(SchemaNode):
         semantical_name: str,
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
     ):
         """
         Initialize a schema directory node.
@@ -108,8 +116,10 @@ class SchemaDirectory(SchemaNode):
             path: Path to this directory
             semantical_name: The semantic name of this directory in the schema
             description: Optional description of the directory
+            pattern_validation: Optional regex pattern for name validation
+            metadata: Optional metadata for custom validations
         """
-        super().__init__(path, semantical_name, description, pattern_validation)
+        super().__init__(path, semantical_name, description, pattern_validation, metadata)
         self.children: list[SchemaNode] = []
 
     def get_type(self) -> str:
