@@ -1,3 +1,6 @@
+# Skip examples for now until the package is more stable.
+examples/
+
 docs/source
 
 # From https://raw.githubusercontent.com/github/gitignore/main/Python.gitignore
