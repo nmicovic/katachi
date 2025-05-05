@@ -10,8 +10,8 @@ from rich.tree import Tree
 
 from katachi.schema.importer import load_yaml
 from katachi.schema.schema_node import SchemaNode
-from katachi.schema.validate import validate_schema
 from katachi.validation.core import ValidationReport, ValidationResult
+from katachi.validation.validators import SchemaValidator
 
 app = typer.Typer(no_args_is_help=True)
 console = Console()
@@ -187,7 +187,7 @@ def validate(
         raise typer.Exit(code=1)
 
     # Validate the directory structure against the schema
-    validation_report = validate_schema(schema, target_path)
+    validation_report = SchemaValidator.validate_schema(schema, target_path)
 
     # Display the results
     _display_validation_results(validation_report, detail_report)

@@ -6,8 +6,6 @@ import yaml
 
 from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode
 
-logging.basicConfig(level=logging.DEBUG)
-
 
 def load_yaml(schema_path: Path, target_path: Path) -> Optional[SchemaNode]:
     """
