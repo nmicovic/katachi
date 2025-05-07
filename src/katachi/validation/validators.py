@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any, Optional
 
+from katachi.schema.actions import ActionRegistry, ActionResult, ActionTiming, process_node
 from katachi.schema.actions import NodeContext as ActionNodeContext
 from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode, SchemaPredicateNode
 from katachi.validation.core import ValidationReport, ValidationResult, ValidatorRegistry
@@ -47,7 +48,34 @@ class SchemaValidator:
         predicate_report = SchemaValidator._evaluate_predicates(schema, target_path, registry)
         report.add_results(predicate_report.results)
 
+        # If predicate validation failed, return early
+        if not predicate_report.is_valid():
+            return report
+
+        # Execute after-validation actions if requested
+        if execute_actions:
+            action_results = SchemaValidator._execute_after_validation_actions(registry, context)
+            # Attach action results to the report's context
+            if action_results:
+                report.context["action_results"] = action_results
+
         return report
+
+    @staticmethod
+    def _execute_after_validation_actions(
+        registry: NodeRegistry, context: Optional[dict[str, Any]] = None
+    ) -> list[ActionResult]:
+        """
+        Execute all registered actions that should run after validation.
+
+        Args:
+            registry: Registry of validated nodes
+            context: Additional context data
+
+        Returns:
+            List of action results
+        """
+        return ActionRegistry.execute_actions(registry=registry, context=context, timing=ActionTiming.AFTER_VALIDATION)
 
     @staticmethod
     def _validate_structure(
@@ -72,8 +100,6 @@ class SchemaValidator:
         Returns:
             ValidationReport with structural validation results
         """
-        from katachi.schema.actions import process_node
-
         # Initialize parent_contexts and context if needed
         parent_contexts = parent_contexts or []
         context = context or {}
@@ -97,7 +123,7 @@ class SchemaValidator:
         parent_paths = [p for _, p in parent_contexts]
         registry.register_node(schema, target_path, parent_paths)
 
-        # Execute actions if enabled
+        # Execute actions if enabled and using legacy DURING_VALIDATION timing
         if execute_actions:
             process_node(schema, target_path, parent_contexts, context)
 

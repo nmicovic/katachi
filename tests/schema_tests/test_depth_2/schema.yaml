@@ -1,0 +1,30 @@
+semantical_name: dataset
+pattern_name: dataset_root
+type: directory
+description: The core directory of the dataset
+children:
+  - semantical_name: dataset_source
+    pattern_name: "dataset\\d+"
+    type: directory
+    description: A single dataset item that contains multiple sources of images
+    children:
+      - semantical_name: dataset_source
+        pattern_name: "source\\d+"
+        type: directory
+        description: Contains the source of the dataset
+        children:
+          - semantical_name: img_item
+            type: file
+            pattern_name: "img\\d+"
+            extension: .jpg
+            description: An image jpg file
+  - semantical_name: dataset_meta
+    pattern_name: "meta"
+    type: directory
+    description: Directory containing metadata
+    children:
+      - semantical_name: meta_item
+        type: file
+        pattern_name: "dataset_meta"
+        extension: .yaml
+        description: A metadata yaml file

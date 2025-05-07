@@ -25,6 +25,7 @@ class ValidationReport:
 
     def __init__(self) -> None:
         self.results: list[ValidationResult] = []
+        self.context: dict[str, Any] = {}
 
     def add_result(self, result: ValidationResult) -> None:
         self.results.append(result)

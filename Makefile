@@ -29,6 +29,7 @@ schema-test: ## Run schema validation tests
 	@uv run python -m katachi validate "tests/schema_tests/test_sanity/schema.yaml" "tests/schema_tests/test_sanity/dataset"
 	@uv run python -m katachi validate "tests/schema_tests/test_depth_1/schema.yaml" "tests/schema_tests/test_depth_1/dataset"
 	@uv run python -m katachi validate "tests/schema_tests/test_paired_files/schema.yaml" "tests/schema_tests/test_paired_files/data"
+	@uv run python -m katachi validate "tests/schema_tests/test_depth_2/schema.yaml" "tests/schema_tests/test_depth_2/dataset_root"
 
 .PHONY: build
 build: clean-build ## Build wheel file
