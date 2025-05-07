@@ -1,0 +1,21 @@
+semantical_name: data
+type: directory
+pattern_name: data
+children:
+  - semantical_name: image
+    pattern_name: "img\\d+"
+    type: file
+    extension: .jpg
+    description: Data representation or the data in format dd.mm.yyyy
+  - semantical_name: metadata
+    pattern_name: "img\\d+"
+    type: file
+    extension: .json
+    description: Data representation or the data in format dd.mm.yyyy
+  - semantical_name: file_pairs_check
+    type: predicate
+    predicate_type: pair_comparison
+    description: Check if the image and metadata files are paired (img1.jpg and img1.json for example)
+    elements:
+      - image
+      - metadata

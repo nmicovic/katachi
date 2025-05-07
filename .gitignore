@@ -1,5 +1,6 @@
 # Skip examples for now until the package is more stable.
 examples/
+ideas.md
 
 docs/source
 

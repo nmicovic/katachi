@@ -152,3 +152,46 @@ class SchemaDirectory(SchemaNode):
     def __repr__(self) -> str:
         """Detailed string representation of the directory node."""
         return f"{self.__class__.__name__}(path='{self.path}', semantical_name='{self.semantical_name}', children={len(self.children)})"
+
+
+class SchemaPredicateNode(SchemaNode):
+    """
+    Represents a predicate node in the schema.
+    Used for validating relationships between other schema nodes.
+    """
+
+    def __init__(
+        self,
+        path: Path,
+        semantical_name: str,
+        predicate_type: str,
+        elements: list[str],
+        description: Optional[str] = None,
+        metadata: Optional[dict[str, Any]] = None,
+    ):
+        """
+        Initialize a schema predicate node.
+
+        Args:
+            path: Path to this node
+            semantical_name: The semantic name of this node in the schema
+            predicate_type: Type of predicate (e.g., 'pair_comparison')
+            elements: List of semantical names of nodes this predicate operates on
+            description: Optional description of the predicate
+            metadata: Optional metadata for custom validations
+        """
+        super().__init__(path, semantical_name, description, None, metadata)
+        self.predicate_type: str = predicate_type
+        self.elements: list[str] = elements
+
+    def get_type(self) -> str:
+        return "predicate"
+
+    def __repr__(self) -> str:
+        """Detailed string representation of the predicate node."""
+        return (
+            f"{self.__class__.__name__}(path='{self.path}', "
+            f"semantical_name='{self.semantical_name}', "
+            f"predicate_type='{self.predicate_type}', "
+            f"elements={self.elements})"
+        )

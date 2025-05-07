@@ -4,7 +4,7 @@ from typing import Any, Optional, cast
 
 import yaml
 
-from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode
+from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode, SchemaPredicateNode
 
 
 def load_yaml(schema_path: Path, target_path: Path) -> Optional[SchemaNode]:
@@ -109,6 +109,26 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
                 return None
 
         return directory
+    elif node_type == "predicate":
+        # Parse predicate node
+        predicate_type = node_data.get("predicate_type", "")
+        elements = node_data.get("elements", [])
+
+        if not predicate_type:
+            logging.error(f"Predicate node missing required predicate_type: {node_data}")
+            return None
+
+        if not elements or not isinstance(elements, list):
+            logging.error(f"Predicate node missing required elements list: {node_data}")
+            return None
+
+        return SchemaPredicateNode(
+            path=node_path,
+            semantical_name=semantical_name,
+            predicate_type=predicate_type,
+            elements=elements,
+            description=description,
+        )
     else:
         logging.error(f"Invalid or missing node type: {node_type}")
         return None
