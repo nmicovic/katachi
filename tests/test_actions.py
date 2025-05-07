@@ -41,7 +41,7 @@ def test_action_execution_order() -> None:
     )
 
     ActionRegistry.register(
-        "image", test_image_action, timing=ActionTiming.AFTER_VALIDATION, description="Process image files"
+        "img_item", test_image_action, timing=ActionTiming.AFTER_VALIDATION, description="Process image files"
     )
 
     # Load schema and validate with actions
@@ -82,12 +82,12 @@ def test_legacy_action_compatibility() -> None:
     action_log.clear()
 
     # Register test legacy action
-    def legacy_action(node, path, parent_contexts, context):
+    def legacy_action(node, path, parent_contexts, context) -> None:
         """Legacy action."""
         action_log.append(f"Legacy action: {path.name}")
 
     # Register with legacy registration
-    register_action("image", legacy_action)
+    register_action("img_item", legacy_action)
 
     # Load schema and validate with actions
     schema = load_yaml(schema_path, target_path)
