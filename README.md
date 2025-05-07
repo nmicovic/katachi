@@ -10,69 +10,157 @@
   <img src="logo.png" alt="Logo" width="300"/>
 </div>
 
-Python package for validating, processing and parsing directories.
+**Katachi** is a Python package for validating, processing, and parsing directory structures against defined schemas.
 
-- **Github repository**: <https://github.com/nmicovic/katachi/>
-- **Documentation** <https://nmicovic.github.io/katachi/>
+> **Note**: Katachi is currently under active development and should be considered a work in progress. APIs may change in future releases.
 
-## Getting started with your project
+- **GitHub repository**: <https://github.com/nmicovic/katachi/>
+- **Documentation**: <https://nmicovic.github.io/katachi/>
 
-### 1. Create a New Repository
+## Features
 
-First, create a repository on GitHub with the same name as this project, and then run the following commands:
+- 📐 **Schema-based validation** - Define expected directory structures using YAML
+- 🧩 **Extensible architecture** - Create custom validators and actions
+- 🔄 **Relationship validation** - Validate relationships between files (like paired files)
+- 🚀 **Command-line interface** - Easy to use CLI with rich formatting
+- 📋 **Detailed reports** - Get comprehensive validation reports
+
+## Installation
+
+Install from PyPI:
 
 ```bash
-git init -b main
-git add .
-git commit -m "init commit"
-git remote add origin git@github.com:nmicovic/katachi.git
-git push -u origin main
+pip install katachi
 ```
 
-### 2. Set Up Your Development Environment
-
-Then, install the environment and the pre-commit hooks with
+For development:
 
 ```bash
+git clone https://github.com/nmicovic/katachi.git
+cd katachi
 make install
 ```
 
-This will also generate your `uv.lock` file
+## Quick Start
 
-### 3. Run the pre-commit hooks
+### Define a schema (schema.yaml)
 
-Initially, the CI/CD pipeline might be failing due to formatting issues. To resolve those run:
-
-```bash
-uv run pre-commit run -a
+```yaml
+semantical_name: data
+type: directory
+pattern_name: data
+children:
+  - semantical_name: image
+    pattern_name: "img\\d+"
+    type: file
+    extension: .jpg
+    description: "Image files with numeric identifiers"
+  - semantical_name: metadata
+    pattern_name: "img\\d+"
+    type: file
+    extension: .json
+    description: "Metadata for image files"
+  - semantical_name: file_pairs_check
+    type: predicate
+    predicate_type: pair_comparison
+    description: "Check if images have matching metadata files"
+    elements:
+      - image
+      - metadata
 ```
 
-### 4. Commit the changes
-
-Lastly, commit the changes made by the two steps above to your repository.
+### Validate a directory structure
 
 ```bash
-git add .
-git commit -m 'Fix formatting issues'
-git push origin main
+katachi validate schema.yaml target_directory
 ```
 
-You are now ready to start development on your project!
-The CI/CD pipeline will be triggered when you open a pull request, merge to main, or when you create a new release.
+## Command-Line Examples
 
-To finalize the set-up for publishing to PyPI, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/publishing/#set-up-for-pypi).
-For activating the automatic documentation with MkDocs, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/mkdocs/#enabling-the-documentation-on-github).
-To enable the code coverage reports, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/codecov/).
+Validate a simple directory structure:
+```bash
+katachi validate "tests/schema_tests/test_sanity/schema.yaml" "tests/schema_tests/test_sanity/dataset"
+```
 
-## Releasing a new version
+Validate a nested directory structure:
+```bash
+katachi validate "tests/schema_tests/test_depth_1/schema.yaml" "tests/schema_tests/test_depth_1/dataset"
+```
 
-- Create an API Token on [PyPI](https://pypi.org/).
-- Add the API Token to your projects secrets with the name `PYPI_TOKEN` by visiting [this page](https://github.com/nmicovic/katachi/settings/secrets/actions/new).
-- Create a [new release](https://github.com/nmicovic/katachi/releases/new) on Github.
-- Create a new tag in the form `*.*.*`.
+Validate paired files (e.g., ensure each .jpg has a matching .json file):
+```bash
+katachi validate "tests/schema_tests/test_paired_files/schema.yaml" "tests/schema_tests/test_paired_files/data"
+```
 
-For more details, see [here](https://fpgmaas.github.io/cookiecutter-uv/features/cicd/#how-to-trigger-a-release).
+## Python API
 
----
+```python
+from pathlib import Path
+from katachi.schema.importer import load_yaml
+from katachi.schema.validate import validate_schema
 
-Repository initiated with [fpgmaas/cookiecutter-uv](https://github.com/fpgmaas/cookiecutter-uv).
+# Load schema from YAML
+schema = load_yaml(Path("schema.yaml"), Path("data_directory"))
+
+# Validate directory against schema
+report = validate_schema(schema, Path("data_directory"))
+
+# Check if validation passed
+if report.is_valid():
+    print("Validation successful!")
+else:
+    print("Validation failed with the following issues:")
+    for result in report.results:
+        if not result.is_valid:
+            print(f"- {result.path}: {result.message}")
+```
+
+## Extending Katachi
+
+### Custom validators
+
+```python
+from pathlib import Path
+from katachi.schema.schema_node import SchemaNode
+from katachi.validation.core import ValidationResult, ValidatorRegistry
+
+def my_custom_validator(node: SchemaNode, path: Path) -> ValidationResult:
+    # Custom validation logic
+    return ValidationResult(
+        is_valid=True,
+        message="Custom validation passed",
+        path=path,
+        validator_name="custom_validator"
+    )
+
+# Register the validator
+ValidatorRegistry.register("custom_validator", my_custom_validator)
+```
+
+### Custom file processing
+
+```python
+from pathlib import Path
+from typing import Any
+from katachi.schema.actions import register_action, NodeContext
+
+def process_image(node, path: Path, parent_contexts: list[NodeContext], context: dict[str, Any]) -> None:
+    # Custom image processing logic
+    print(f"Processing image: {path}")
+    # Access parent context if needed
+    for parent_node, parent_path in parent_contexts:
+        if parent_node.semantical_name == "timestamp":
+            print(f"Image from date: {parent_path.name}")
+            break
+
+# Register the action
+register_action("image", process_image)
+```
+
+## Contributing
+
+Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+
+## License
+
+This project is licensed under the terms of the [MIT License](LICENSE).
