@@ -79,9 +79,10 @@ def _create_failures_table(failures: list[ValidationResult]) -> Table:
     table.add_column("Path", style="cyan", no_wrap=True)
     table.add_column("Error", style="red")
     table.add_column("Validator", style="blue")
+    table.add_column("Node Origin", style="blue")
 
     for failure in failures:
-        table.add_row(str(failure.path), failure.message, failure.validator_name)
+        table.add_row(str(failure.path), failure.message, failure.validator_name, failure.node_origin)
 
     return table
 

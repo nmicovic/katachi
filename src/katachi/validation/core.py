@@ -13,6 +13,7 @@ class ValidationResult:
     message: str
     path: Path
     validator_name: str
+    node_origin: str
     context: Optional[dict[str, Any]] = None
 
     def __bool__(self) -> bool:
@@ -83,6 +84,7 @@ class ValidatorRegistry:
                 results.append(
                     ValidationResult(
                         is_valid=False,
+                        node_origin=node.semantical_name,
                         message=f"Validator '{name}' failed with error: {e!s}",
                         path=path,
                         validator_name=name,

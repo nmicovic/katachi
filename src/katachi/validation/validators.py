@@ -228,6 +228,7 @@ class SchemaValidator:
             report.add_result(
                 ValidationResult(
                     is_valid=False,
+                    node_origin=node.semantical_name,
                     message=f"Unknown schema node type: {type(node).__name__}",
                     path=path,
                     validator_name="schema_type",
@@ -246,6 +247,7 @@ class SchemaValidator:
         report.add_result(
             ValidationResult(
                 is_valid=is_file,
+                node_origin=file_node.semantical_name,
                 message="" if is_file else f"Expected a file at {path}",
                 path=path,
                 validator_name="is_file",
@@ -264,6 +266,7 @@ class SchemaValidator:
             report.add_result(
                 ValidationResult(
                     is_valid=has_ext,
+                    node_origin=file_node.semantical_name,
                     message="" if has_ext else f'Expected extension "{ext}", got "{path.suffix}"',
                     path=path,
                     validator_name="extension",
@@ -277,6 +280,7 @@ class SchemaValidator:
             report.add_result(
                 ValidationResult(
                     is_valid=matches_pattern,
+                    node_origin=file_node.semantical_name,
                     message=""
                     if matches_pattern
                     else f'{path.name} doesn\'t match pattern "{file_node.pattern_validation.pattern}"',
@@ -299,6 +303,7 @@ class SchemaValidator:
         report.add_result(
             ValidationResult(
                 is_valid=is_dir,
+                node_origin=dir_node.semantical_name,
                 message="" if is_dir else f"Expected a directory at {path}",
                 path=path,
                 validator_name="is_directory",
@@ -321,6 +326,7 @@ class SchemaValidator:
                     else f'{path.name} doesn\'t match pattern "{dir_node.pattern_validation.pattern}"',
                     path=path,
                     validator_name="pattern",
+                    node_origin=dir_node.semantical_name,
                     context=context,
                 )
             )
@@ -352,6 +358,7 @@ class SchemaValidator:
                 report.add_result(
                     ValidationResult(
                         is_valid=False,
+                        node_origin=predicate_node.semantical_name,
                         message=f"Pair comparison predicate needs at least 2 elements, got {len(predicate_node.elements)}",
                         path=path,
                         validator_name=predicate_node.semantical_name,
@@ -390,6 +397,7 @@ class SchemaValidator:
                     report.add_result(
                         ValidationResult(
                             is_valid=False,
+                            node_origin=predicate_node.semantical_name,
                             message=f"Missing paired {element_name} files for: {missing_list}",
                             path=path,
                             validator_name=f"pair_comparison_{predicate_node.semantical_name}",
@@ -401,6 +409,7 @@ class SchemaValidator:
             report.add_result(
                 ValidationResult(
                     is_valid=False,
+                    node_origin=predicate_node.semantical_name,
                     message=f"Unsupported predicate type: {predicate_node.predicate_type}",
                     path=path,
                     validator_name="predicate_validation",
