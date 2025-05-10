@@ -107,6 +107,52 @@ class SchemaValidator:
         # Create a report to collect validation results
         report = ValidationReport()
 
+        # Validate and register the current node
+        node_validation_report = SchemaValidator._validate_structure_node(
+            schema, target_path, registry, execute_actions, parent_contexts, context
+        )
+
+        # If the node validation failed, return early
+        if not node_validation_report.is_valid():
+            return node_validation_report
+
+        # Add the node validation results to our report
+        report.add_results(node_validation_report.results)
+
+        # Handle directory children if applicable
+        if isinstance(schema, SchemaDirectory) and target_path.is_dir():
+            dir_validation_report = SchemaValidator._process_directory_children(
+                schema, target_path, registry, execute_actions, parent_contexts, context
+            )
+            report.add_results(dir_validation_report.results)
+
+        return report
+
+    @staticmethod
+    def _validate_structure_node(
+        schema: SchemaNode,
+        target_path: Path,
+        registry: NodeRegistry,
+        execute_actions: bool,
+        parent_contexts: list[ActionNodeContext],
+        context: dict[str, Any],
+    ) -> ValidationReport:
+        """
+        Validate a node and register it if valid.
+
+        Args:
+            schema: Schema node to validate
+            target_path: Path to validate
+            registry: Node registry
+            execute_actions: Whether to execute actions
+            parent_contexts: List of parent contexts
+            context: Additional context
+
+        Returns:
+            ValidationReport with results
+        """
+        report = ValidationReport()
+
         # Run standard validation for this node
         node_report = SchemaValidator.validate_node(schema, target_path)
         report.add_results(node_report.results)
@@ -127,44 +173,148 @@ class SchemaValidator:
         if execute_actions:
             process_node(schema, target_path, parent_contexts, context)
 
-        # For directories, validate children
-        if isinstance(schema, SchemaDirectory) and target_path.is_dir():
-            child_paths = list(target_path.iterdir())
+        return report
 
-            # Add current node to parent contexts before processing children
-            parent_contexts.append((schema, target_path))
+    @staticmethod
+    def _process_directory_children(
+        dir_node: SchemaDirectory,
+        dir_path: Path,
+        registry: NodeRegistry,
+        execute_actions: bool,
+        parent_contexts: list[ActionNodeContext],
+        context: dict[str, Any],
+    ) -> ValidationReport:
+        """
+        Process children of a directory node.
 
-            for child_path in child_paths:
-                child_valid = False
-                child_reports = []
+        Args:
+            dir_node: Directory schema node
+            dir_path: Directory path
+            registry: Node registry
+            execute_actions: Whether to execute actions
+            parent_contexts: List of parent contexts
+            context: Additional context
 
-                for child in schema.children:
-                    # Skip predicate nodes during structure validation
+        Returns:
+            ValidationReport with results
+        """
+        report = ValidationReport()
+        child_paths = list(dir_path.iterdir())
+
+        # Add current node to parent contexts before processing children
+        parent_contexts.append((dir_node, dir_path))
+
+        # Track which paths have been successfully validated
+        validated_paths: set[Path] = set()
+
+        # First pass: try to validate each child path with each schema
+        SchemaValidator._validate_children_first_pass(
+            dir_node, child_paths, registry, execute_actions, parent_contexts, context, report, validated_paths
+        )
+
+        # Second pass: handle paths that weren't validated by any schema
+        SchemaValidator._handle_unvalidated_paths(dir_node, child_paths, validated_paths, report)
+
+        # Remove current node from parent contexts after processing all children
+        parent_contexts.pop()
+
+        # Register this directory as fully processed
+        registry.register_processed_dir(dir_path)
+
+        return report
+
+    @staticmethod
+    def _validate_children_first_pass(
+        dir_node: SchemaDirectory,
+        child_paths: list[Path],
+        registry: NodeRegistry,
+        execute_actions: bool,
+        parent_contexts: list[ActionNodeContext],
+        context: dict[str, Any],
+        report: ValidationReport,
+        validated_paths: set[Path],
+    ) -> None:
+        """
+        First pass of child validation: try to find matching schemas.
+
+        Args:
+            dir_node: Directory schema node
+            child_paths: List of child paths to validate
+            registry: Node registry
+            execute_actions: Whether to execute actions
+            parent_contexts: List of parent contexts
+            context: Additional context
+            report: Report to add results to
+            validated_paths: Set to track validated paths
+        """
+        for child_path in child_paths:
+            for child in dir_node.children:
+                # Skip predicate nodes during structure validation
+                if isinstance(child, SchemaPredicateNode):
+                    continue
+
+                child_report = SchemaValidator._validate_structure(
+                    child, child_path, registry, execute_actions, parent_contexts, context
+                )
+
+                if child_report.is_valid():
+                    # If valid, add results and mark this path as validated
+                    report.add_results(child_report.results)
+                    validated_paths.add(child_path)
+                    # Break the inner loop - no need to try other schemas for this path
+                    break
+
+    @staticmethod
+    def _handle_unvalidated_paths(
+        dir_node: SchemaDirectory,
+        child_paths: list[Path],
+        validated_paths: set[Path],
+        report: ValidationReport,
+    ) -> None:
+        """
+        Handle paths that weren't validated by any schema.
+
+        Args:
+            dir_node: Directory schema node
+            child_paths: List of child paths
+            validated_paths: Set of paths that were validated
+            report: Report to add results to
+        """
+        for child_path in child_paths:
+            if child_path not in validated_paths:
+                # Create a consolidated error report for paths that didn't match any schema
+                best_match_report = None
+                best_match_score = -1
+
+                # Find the most suitable schema for error reporting
+                for child in dir_node.children:
                     if isinstance(child, SchemaPredicateNode):
                         continue
 
-                    child_report = SchemaValidator._validate_structure(
-                        child, child_path, registry, execute_actions, parent_contexts, context
+                    # Get validation report for this schema-path combination
+                    child_report = SchemaValidator.validate_node(child, child_path)
+
+                    # Simple scoring system: count passing validations
+                    passing_validations = sum(1 for result in child_report.results if result.is_valid)
+
+                    # If this schema provides a better match, use it for reporting
+                    if passing_validations > best_match_score:
+                        best_match_score = passing_validations
+                        best_match_report = child_report
+
+                # Report the most informative errors
+                if best_match_report:
+                    report.add_results(best_match_report.results)
+                else:
+                    # Fallback if no schema provided useful information
+                    report.add_result(
+                        ValidationResult(
+                            is_valid=False,
+                            message=f"Path {child_path.name} does not match any schema element",
+                            path=child_path,
+                            validator_name="schema_match",
+                        )
                     )
-
-                    child_reports.append(child_report)
-
-                    if child_report.is_valid():
-                        child_valid = True
-                        report.add_results(child_report.results)
-                        break
-
-                if not child_valid:
-                    for child_report in child_reports:
-                        report.add_results(child_report.results)
-
-            # Remove current node from parent contexts after processing all children
-            parent_contexts.pop()
-
-            # Register this directory as fully processed
-            registry.register_processed_dir(target_path)
-
-        return report
 
     @staticmethod
     def _evaluate_predicates(
@@ -246,7 +396,7 @@ class SchemaValidator:
         report.add_result(
             ValidationResult(
                 is_valid=is_file,
-                message="" if is_file else f"Expected a file at {path}",
+                message="" if is_file else f"Expected a file at {path} for {file_node.semantical_name}",
                 path=path,
                 validator_name="is_file",
                 context=context,
