@@ -378,6 +378,8 @@ def validate(
         schema, target_path, execute_actions=execute_actions, context=context
     )
 
+    validation_report.sort_by_longest_path()
+
     # Display the results
     _display_validation_results(validation_report, detail_report)
 

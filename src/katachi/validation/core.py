@@ -28,6 +28,10 @@ class ValidationReport:
         self.results: list[ValidationResult] = []
         self.context: dict[str, Any] = {}
 
+    def sort_by_longest_path(self) -> None:
+        """Sort results by the length of their paths in descending order."""
+        self.results.sort(key=lambda result: len(result.path.parts), reverse=True)
+
     def add_result(self, result: ValidationResult) -> None:
         self.results.append(result)
 

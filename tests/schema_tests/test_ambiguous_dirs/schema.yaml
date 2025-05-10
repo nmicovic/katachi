@@ -1,0 +1,33 @@
+semantical_name: root
+type: directory
+children:
+  - semantical_name: data_dir1
+    pattern_name: "data\\d+"
+    type: directory
+    children:
+      - semantical_name: data_date
+        pattern_name: "data_jpg\\d+"
+        type: directory
+        children:
+          - semantical_name: img_item1
+            type: file
+            pattern_name: "img\\d+"
+            extension: .jpg
+
+  - semantical_name: data_dir2
+    pattern_name: "data\\d+"
+    type: directory
+    children:
+      - semantical_name: source_data
+        pattern_name: "data_png\\d+"
+        type: directory
+        children:
+          - semantical_name: img_item2
+            pattern_name: "img\\d+"
+            type: file
+            extension: .png
+
+  - semantical_name: meta
+    pattern_name: meta
+    type: file
+    extension: .json
