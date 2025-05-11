@@ -1,3 +1,5 @@
+import pwd
+import stat
 from pathlib import Path
 from typing import Any, Optional
 
@@ -290,6 +292,68 @@ class SchemaValidator:
                 )
             )
 
+        # Check permissions
+        if file_node.permissions:
+            try:
+                # Convert string permission (e.g., "0750") to integer
+                expected_mode = int(file_node.permissions, 8)
+                file_stat = path.stat()
+                file_mode = stat.S_IMODE(file_stat.st_mode)
+
+                has_permissions = file_mode == expected_mode
+                report.add_result(
+                    ValidationResult(
+                        is_valid=has_permissions,
+                        node_origin=file_node.semantical_name,
+                        message=""
+                        if has_permissions
+                        else f'Expected permissions "{oct(expected_mode)}", got "{oct(file_mode)}"',
+                        path=path,
+                        validator_name="permissions",
+                        context=context,
+                    )
+                )
+            except ValueError:
+                report.add_result(
+                    ValidationResult(
+                        is_valid=False,
+                        node_origin=file_node.semantical_name,
+                        message=f'Invalid permission format: "{file_node.permissions}". Expected octal format like "0750"',
+                        path=path,
+                        validator_name="permissions",
+                        context=context,
+                    )
+                )
+
+        # Check owner
+        if file_node.owner:
+            try:
+                file_owner = pwd.getpwuid(path.stat().st_uid).pw_name
+                has_owner = file_owner == file_node.owner
+                report.add_result(
+                    ValidationResult(
+                        is_valid=has_owner,
+                        node_origin=file_node.semantical_name,
+                        message="" if has_owner else f'Expected owner "{file_node.owner}", got "{file_owner}"',
+                        path=path,
+                        validator_name="owner",
+                        context=context,
+                    )
+                )
+            except KeyError:
+                # This can happen if the UID doesn't have a mapping in the password database
+                uid = path.stat().st_uid
+                report.add_result(
+                    ValidationResult(
+                        is_valid=False,
+                        node_origin=file_node.semantical_name,
+                        message=f'Could not resolve owner for UID {uid}. Expected "{file_node.owner}"',
+                        path=path,
+                        validator_name="owner",
+                        context=context,
+                    )
+                )
+
         return report
 
     @staticmethod
@@ -330,6 +394,68 @@ class SchemaValidator:
                     context=context,
                 )
             )
+
+        # Check permissions
+        if dir_node.permissions:
+            try:
+                # Convert string permission (e.g., "0750") to integer
+                expected_mode = int(dir_node.permissions, 8)
+                dir_stat = path.stat()
+                dir_mode = stat.S_IMODE(dir_stat.st_mode)
+
+                has_permissions = dir_mode == expected_mode
+                report.add_result(
+                    ValidationResult(
+                        is_valid=has_permissions,
+                        node_origin=dir_node.semantical_name,
+                        message=""
+                        if has_permissions
+                        else f'Expected permissions "{oct(expected_mode)}", got "{oct(dir_mode)}"',
+                        path=path,
+                        validator_name="permissions",
+                        context=context,
+                    )
+                )
+            except ValueError:
+                report.add_result(
+                    ValidationResult(
+                        is_valid=False,
+                        node_origin=dir_node.semantical_name,
+                        message=f'Invalid permission format: "{dir_node.permissions}". Expected octal format like "0750"',
+                        path=path,
+                        validator_name="permissions",
+                        context=context,
+                    )
+                )
+
+        # Check owner
+        if dir_node.owner:
+            try:
+                dir_owner = pwd.getpwuid(path.stat().st_uid).pw_name
+                has_owner = dir_owner == dir_node.owner
+                report.add_result(
+                    ValidationResult(
+                        is_valid=has_owner,
+                        node_origin=dir_node.semantical_name,
+                        message="" if has_owner else f'Expected owner "{dir_node.owner}", got "{dir_owner}"',
+                        path=path,
+                        validator_name="owner",
+                        context=context,
+                    )
+                )
+            except KeyError:
+                # This can happen if the UID doesn't have a mapping in the password database
+                uid = path.stat().st_uid
+                report.add_result(
+                    ValidationResult(
+                        is_valid=False,
+                        node_origin=dir_node.semantical_name,
+                        message=f'Could not resolve owner for UID {uid}. Expected "{dir_node.owner}"',
+                        path=path,
+                        validator_name="owner",
+                        context=context,
+                    )
+                )
 
         return report
 

@@ -20,6 +20,8 @@ class SchemaNode(ABC):
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        permissions: Optional[str] = None,
+        owner: Optional[str] = None,
     ):
         """
         Initialize a schema node.
@@ -30,12 +32,16 @@ class SchemaNode(ABC):
             description: Optional description of the node
             pattern_validation: Optional regex pattern for name validation
             metadata: Optional metadata for custom validations
+            permissions: Optional Unix-style permissions string (e.g., "0750")
+            owner: Optional expected owner of the file/directory
         """
         self.path: Path = path
         self.semantical_name: str = semantical_name
         self.description: Optional[str] = description
         self.pattern_validation: Optional[Pattern] = None
         self.metadata: dict[str, Any] = metadata or {}
+        self.permissions: Optional[str] = permissions
+        self.owner: Optional[str] = owner
 
         if pattern_validation:
             self.pattern_validation = re_compile(pattern_validation)
@@ -72,6 +78,8 @@ class SchemaFile(SchemaNode):
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        permissions: Optional[str] = None,
+        owner: Optional[str] = None,
     ):
         """
         Initialize a schema file node.
@@ -83,8 +91,10 @@ class SchemaFile(SchemaNode):
             description: Optional description of the file
             pattern_validation: Optional regex pattern for name validation
             metadata: Optional metadata for custom validations
+            permissions: Optional Unix-style permissions string (e.g., "0750")
+            owner: Optional expected owner of the file
         """
-        super().__init__(path, semantical_name, description, pattern_validation, metadata)
+        super().__init__(path, semantical_name, description, pattern_validation, metadata, permissions, owner)
         self.extension: str = extension
 
     def get_type(self) -> str:
@@ -108,6 +118,8 @@ class SchemaDirectory(SchemaNode):
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        permissions: Optional[str] = None,
+        owner: Optional[str] = None,
     ):
         """
         Initialize a schema directory node.
@@ -118,8 +130,10 @@ class SchemaDirectory(SchemaNode):
             description: Optional description of the directory
             pattern_validation: Optional regex pattern for name validation
             metadata: Optional metadata for custom validations
+            permissions: Optional Unix-style permissions string (e.g., "0750")
+            owner: Optional expected owner of the directory
         """
-        super().__init__(path, semantical_name, description, pattern_validation, metadata)
+        super().__init__(path, semantical_name, description, pattern_validation, metadata, permissions, owner)
         self.children: list[SchemaNode] = []
 
     def get_type(self) -> str:
@@ -168,6 +182,8 @@ class SchemaPredicateNode(SchemaNode):
         elements: list[str],
         description: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
+        permissions: Optional[str] = None,
+        owner: Optional[str] = None,
     ):
         """
         Initialize a schema predicate node.
@@ -179,8 +195,10 @@ class SchemaPredicateNode(SchemaNode):
             elements: List of semantical names of nodes this predicate operates on
             description: Optional description of the predicate
             metadata: Optional metadata for custom validations
+            permissions: Optional Unix-style permissions string (e.g., "0750")
+            owner: Optional expected owner of the predicate node
         """
-        super().__init__(path, semantical_name, description, None, metadata)
+        super().__init__(path, semantical_name, description, None, metadata, permissions, owner)
         self.predicate_type: str = predicate_type
         self.elements: list[str] = elements
 

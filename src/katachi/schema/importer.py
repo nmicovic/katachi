@@ -75,6 +75,8 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
     semantical_name = node_data.get("semantical_name", "")
     description = node_data.get("description")
     pattern_name = node_data.get("pattern_name")
+    permissions = node_data.get("permissions")
+    owner = node_data.get("owner")
 
     # For root node, use parent_path directly instead of appending the name
     # This makes the validation work with the actual directory structure
@@ -89,11 +91,18 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
             extension=extension,
             description=description,
             pattern_validation=pattern_name,
+            permissions=permissions,
+            owner=owner,
         )
     elif node_type == "directory":
         # Create a directory node
         directory = SchemaDirectory(
-            path=node_path, semantical_name=semantical_name, description=description, pattern_validation=pattern_name
+            path=node_path,
+            semantical_name=semantical_name,
+            description=description,
+            pattern_validation=pattern_name,
+            permissions=permissions,
+            owner=owner,
         )
 
         # Parse children recursively if they exist
@@ -128,6 +137,8 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
             predicate_type=predicate_type,
             elements=elements,
             description=description,
+            permissions=permissions,
+            owner=owner,
         )
     else:
         logging.error(f"Invalid or missing node type: {node_type}")
