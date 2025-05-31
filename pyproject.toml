@@ -18,6 +18,9 @@ classifiers = [
     "Topic :: Software Development :: Libraries :: Python Modules",
 ]
 dependencies = [
+    "adlfs>=2024.12.0",
+    "fsspec>=2025.5.1",
+    "loguru>=0.7.3",
     "pyyaml>=6.0.2",
     "rich>=14.0.0",
     "typer>=0.15.3",
@@ -61,6 +64,33 @@ check_untyped_defs = true
 warn_return_any = true
 warn_unused_ignores = true
 show_error_codes = true
+
+[[tool.mypy.overrides]]
+module = "adlfs.*"
+ignore_missing_imports = true
+follow_imports = "skip"
+disable_error_code = ["import-untyped", "no-any-unimported", "union-attr"]
+
+[[tool.mypy.overrides]]
+module = "fsspec.*"
+ignore_missing_imports = true
+follow_imports = "skip"
+disable_error_code = ["import-untyped", "no-any-unimported", "union-attr"]
+
+[[tool.mypy.overrides]]
+# Adding this due to ffspec not having type stubs.
+module = "katachi/schema/schema_node"
+disable_error_code = ["no-any-unimported"]
+
+[[tool.mypy.overrides]]
+# Adding this due to fsspec and adlfs not having type stubs.
+module = "katachi/schema/importer"
+disable_error_code = ["no-any-unimported", "arg-type"]
+
+[[tool.mypy.overrides]]
+# Adding this due to fsspec and adlfs not having type stubs.
+module = "katachi/utils/fs_utils"
+disable_error_code = ["no-any-unimported", "arg-type"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
@@ -122,3 +152,6 @@ skip_empty = true
 [tool.coverage.run]
 branch = true
 source = ["src"]
+
+[tool.deptry.per_rule_ignores]
+DEP002 = ["fsspec", "adlfs"]

@@ -1,8 +1,9 @@
 from abc import ABC, abstractmethod
-from pathlib import Path
 from re import Pattern
 from re import compile as re_compile
 from typing import Any, Optional
+
+from fsspec import AbstractFileSystem
 
 
 class SchemaNode(ABC):
@@ -15,8 +16,9 @@ class SchemaNode(ABC):
 
     def __init__(
         self,
-        path: Path,
+        path: str,
         semantical_name: str,
+        fs: AbstractFileSystem,
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -29,14 +31,16 @@ class SchemaNode(ABC):
         Args:
             path: Path to this node
             semantical_name: The semantic name of this node in the schema
+            fs: Filesystem to use for this node
             description: Optional description of the node
             pattern_validation: Optional regex pattern for name validation
             metadata: Optional metadata for custom validations
             permissions: Optional Unix-style permissions string (e.g., "0750")
             owner: Optional expected owner of the file/directory
         """
-        self.path: Path = path
+        self.path: str = path
         self.semantical_name: str = semantical_name
+        self.fs: AbstractFileSystem = fs
         self.description: Optional[str] = description
         self.pattern_validation: Optional[Pattern] = None
         self.metadata: dict[str, Any] = metadata or {}
@@ -64,6 +68,78 @@ class SchemaNode(ABC):
         """Detailed string representation of the node."""
         return f"{self.__class__.__name__}(path='{self.path}', semantical_name='{self.semantical_name}')"
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any], parent_path: str, fs: AbstractFileSystem) -> Optional["SchemaNode"]:
+        """
+        Create a SchemaNode instance from a dictionary.
+
+        Args:
+            data: Dictionary containing node data
+            parent_path: Path to the parent directory
+            fs: Filesystem to use for this node
+
+        Returns:
+            Optional[SchemaNode]: The created node or None if the data is invalid
+        """
+        node_type = data.get("type", "").lower()
+        semantical_name = data.get("semantical_name", "")
+        description = data.get("description")
+        pattern_validation = data.get("pattern_name")
+        permissions = data.get("permissions")
+        owner = data.get("owner")
+        metadata = data.get("metadata")
+
+        node_path = f"{parent_path}/{semantical_name}" if semantical_name else parent_path
+
+        if node_type == "file":
+            extension = data.get("extension", "")
+            return SchemaFile(
+                path=node_path,
+                semantical_name=semantical_name,
+                fs=fs,
+                extension=extension,
+                description=description,
+                pattern_validation=pattern_validation,
+                metadata=metadata,
+                permissions=permissions,
+                owner=owner,
+            )
+        elif node_type == "directory":
+            directory = SchemaDirectory(
+                path=node_path,
+                semantical_name=semantical_name,
+                fs=fs,
+                description=description,
+                pattern_validation=pattern_validation,
+                metadata=metadata,
+                permissions=permissions,
+                owner=owner,
+            )
+            children = data.get("children", [])
+            for child_data in children:
+                child_node = cls.from_dict(child_data, node_path, fs)
+                if child_node:
+                    directory.add_child(child_node)
+            return directory
+        elif node_type == "predicate":
+            predicate_type = data.get("predicate_type", "")
+            elements = data.get("elements", [])
+            if not predicate_type or not elements:
+                return None
+            return SchemaPredicateNode(
+                path=node_path,
+                semantical_name=semantical_name,
+                fs=fs,
+                predicate_type=predicate_type,
+                elements=elements,
+                description=description,
+                metadata=metadata,
+                permissions=permissions,
+                owner=owner,
+            )
+        else:
+            return None
+
 
 class SchemaFile(SchemaNode):
     """
@@ -72,8 +148,9 @@ class SchemaFile(SchemaNode):
 
     def __init__(
         self,
-        path: Path,
+        path: str,
         semantical_name: str,
+        fs: AbstractFileSystem,
         extension: str,
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
@@ -87,6 +164,7 @@ class SchemaFile(SchemaNode):
         Args:
             path: Path to this file
             semantical_name: The semantic name of this file in the schema
+            fs: Filesystem to use for this node
             extension: The file extension
             description: Optional description of the file
             pattern_validation: Optional regex pattern for name validation
@@ -94,7 +172,7 @@ class SchemaFile(SchemaNode):
             permissions: Optional Unix-style permissions string (e.g., "0750")
             owner: Optional expected owner of the file
         """
-        super().__init__(path, semantical_name, description, pattern_validation, metadata, permissions, owner)
+        super().__init__(path, semantical_name, fs, description, pattern_validation, metadata, permissions, owner)
         self.extension: str = extension
 
     def get_type(self) -> str:
@@ -113,8 +191,9 @@ class SchemaDirectory(SchemaNode):
 
     def __init__(
         self,
-        path: Path,
+        path: str,
         semantical_name: str,
+        fs: AbstractFileSystem,
         description: Optional[str] = None,
         pattern_validation: Optional[str] = None,
         metadata: Optional[dict[str, Any]] = None,
@@ -127,13 +206,14 @@ class SchemaDirectory(SchemaNode):
         Args:
             path: Path to this directory
             semantical_name: The semantic name of this directory in the schema
+            fs: Filesystem to use for this node
             description: Optional description of the directory
             pattern_validation: Optional regex pattern for name validation
             metadata: Optional metadata for custom validations
             permissions: Optional Unix-style permissions string (e.g., "0750")
             owner: Optional expected owner of the directory
         """
-        super().__init__(path, semantical_name, description, pattern_validation, metadata, permissions, owner)
+        super().__init__(path, semantical_name, fs, description, pattern_validation, metadata, permissions, owner)
         self.children: list[SchemaNode] = []
 
     def get_type(self) -> str:
@@ -176,8 +256,9 @@ class SchemaPredicateNode(SchemaNode):
 
     def __init__(
         self,
-        path: Path,
+        path: str,
         semantical_name: str,
+        fs: AbstractFileSystem,
         predicate_type: str,
         elements: list[str],
         description: Optional[str] = None,
@@ -191,6 +272,7 @@ class SchemaPredicateNode(SchemaNode):
         Args:
             path: Path to this node
             semantical_name: The semantic name of this node in the schema
+            fs: Filesystem to use for this node
             predicate_type: Type of predicate (e.g., 'pair_comparison')
             elements: List of semantical names of nodes this predicate operates on
             description: Optional description of the predicate
@@ -198,7 +280,7 @@ class SchemaPredicateNode(SchemaNode):
             permissions: Optional Unix-style permissions string (e.g., "0750")
             owner: Optional expected owner of the predicate node
         """
-        super().__init__(path, semantical_name, description, None, metadata, permissions, owner)
+        super().__init__(path, semantical_name, fs, description, None, metadata, permissions, owner)
         self.predicate_type: str = predicate_type
         self.elements: list[str] = elements
 

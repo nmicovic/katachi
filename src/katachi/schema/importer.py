@@ -1,19 +1,23 @@
-import logging
-from pathlib import Path
-from typing import Any, Optional, cast
+from typing import Any, Optional
 
 import yaml
+from fsspec import AbstractFileSystem
 
 from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode, SchemaPredicateNode
+from katachi.utils.logger import logger
 
 
-def load_yaml(schema_path: Path, target_path: Path) -> Optional[SchemaNode]:
+def load_yaml(
+    schema_path: str, target_path: str, schema_fs: AbstractFileSystem, target_fs: AbstractFileSystem
+) -> Optional[SchemaNode]:
     """
     Load a YAML schema file and return a SchemaNode tree structure.
 
     Args:
         schema_path: Path to the YAML schema file
         target_path: Path to the directory that will be validated against the schema
+        schema_fs: Filesystem to use for schema file
+        target_fs: Filesystem to use for target path
 
     Returns:
         The root SchemaNode representing the schema hierarchy
@@ -24,40 +28,36 @@ def load_yaml(schema_path: Path, target_path: Path) -> Optional[SchemaNode]:
         InvalidYAMLContentError: If the YAML content cannot be parsed
         FailedToLoadYAMLFileError: If there are other errors loading the YAML file
     """
-    if not schema_path.exists():
-        logging.error(f"Schema file not found: {schema_path}")
-        return None
-
     try:
-        with open(schema_path) as file:
+        with schema_fs.open(schema_path) as file:
             file_content = file.read()
             if not file_content.strip():
-                logging.error(f"Schema file is empty: {schema_path}")
+                logger.error(f"Schema file is empty: {schema_path}")
                 return None
 
             data = yaml.safe_load(file_content)
             if data is None:
-                logging.error(f"Invalid YAML content in file: {schema_path}")
+                logger.error(f"Invalid YAML content in file: {schema_path}")
                 return None
 
             # Important: For the root node, we use the target_path directly
             # instead of constructing a path based on the schema node name
-            return _parse_node(data, target_path, is_root=True)
-    except yaml.YAMLError:
-        logging.exception(f"Failed to load YAML file {schema_path}")
-        return None
+            return _parse_node(data, target_path, target_fs, is_root=True)
     except Exception:
-        logging.exception(f"An error occurred while loading the YAML file {schema_path}")
+        logger.exception(f"Failed to load schema file {schema_path}")
         return None
 
 
-def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = False) -> Optional[SchemaNode]:
+def _parse_node(
+    node_data: dict[str, Any], parent_path: str, fs: AbstractFileSystem, is_root: bool = False
+) -> Optional[SchemaNode]:
     """
     Recursively parse a node from the YAML data.
 
     Args:
         node_data: Dictionary containing the node data from YAML
         parent_path: Path to the parent directory
+        fs: Filesystem to use for this node
         is_root: Whether this node is the root node of the schema
 
     Returns:
@@ -68,7 +68,7 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
         InvalidNodeTypeError: If the node has an invalid or missing type
     """
     if not isinstance(node_data, dict):
-        logging.error(f"Invalid node data format: {node_data}")
+        logger.error(f"Invalid node data format: {node_data}")
         return None
 
     node_type = node_data.get("type", "").lower()
@@ -80,7 +80,7 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
 
     # For root node, use parent_path directly instead of appending the name
     # This makes the validation work with the actual directory structure
-    node_path = parent_path if is_root else parent_path / semantical_name if semantical_name else parent_path
+    node_path = parent_path if is_root else f"{parent_path}/{semantical_name}" if semantical_name else parent_path
 
     if node_type == "file":
         # Create a file node with its extension
@@ -88,6 +88,7 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
         return SchemaFile(
             path=node_path,
             semantical_name=semantical_name,
+            fs=fs,
             extension=extension,
             description=description,
             pattern_validation=pattern_name,
@@ -99,6 +100,7 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
         directory = SchemaDirectory(
             path=node_path,
             semantical_name=semantical_name,
+            fs=fs,
             description=description,
             pattern_validation=pattern_name,
             permissions=permissions,
@@ -109,12 +111,11 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
         children = node_data.get("children", [])
         for child_data in children:
             # Child nodes are never root nodes
-            child_node = _parse_node(child_data, node_path)
+            child_node = _parse_node(child_data, node_path, fs)
             if child_node:
-                casted_value = cast(SchemaNode, child_node)
-                directory.add_child(casted_value)
+                directory.add_child(child_node)
             else:
-                logging.error(f"Failed to parse child node: {child_data}")
+                logger.error(f"Failed to parse child node: {child_data}")
                 return None
 
         return directory
@@ -124,16 +125,17 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
         elements = node_data.get("elements", [])
 
         if not predicate_type:
-            logging.error(f"Predicate node missing required predicate_type: {node_data}")
+            logger.error(f"Predicate node missing required predicate_type: {node_data}")
             return None
 
         if not elements or not isinstance(elements, list):
-            logging.error(f"Predicate node missing required elements list: {node_data}")
+            logger.error(f"Predicate node missing required elements list: {node_data}")
             return None
 
         return SchemaPredicateNode(
             path=node_path,
             semantical_name=semantical_name,
+            fs=fs,
             predicate_type=predicate_type,
             elements=elements,
             description=description,
@@ -141,5 +143,5 @@ def _parse_node(node_data: dict[str, Any], parent_path: Path, is_root: bool = Fa
             owner=owner,
         )
     else:
-        logging.error(f"Invalid or missing node type: {node_type}")
+        logger.error(f"Invalid or missing node type: {node_type}")
         return None

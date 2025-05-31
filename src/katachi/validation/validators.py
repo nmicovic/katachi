@@ -1,11 +1,9 @@
-import pwd
-import stat
-from pathlib import Path
 from typing import Any, Optional
 
 from katachi.schema.actions import ActionRegistry, ActionResult, ActionTiming, process_node
 from katachi.schema.actions import NodeContext as ActionNodeContext
 from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode, SchemaPredicateNode
+from katachi.utils.logger import logger
 from katachi.validation.core import ValidationReport, ValidationResult, ValidatorRegistry
 from katachi.validation.registry import NodeRegistry
 
@@ -16,7 +14,7 @@ class SchemaValidator:
     @staticmethod
     def validate_schema(
         schema: SchemaNode,
-        target_path: Path,
+        target_path: str,
         execute_actions: bool = False,
         parent_contexts: Optional[list[ActionNodeContext]] = None,
         context: Optional[dict[str, Any]] = None,
@@ -38,6 +36,7 @@ class SchemaValidator:
         registry = NodeRegistry()
 
         # Perform structural validation and collect nodes
+        logger.debug(f"Validating schema at path: {target_path} against schema: {schema.semantical_name}")
         report = SchemaValidator._validate_structure(
             schema, target_path, registry, execute_actions, parent_contexts, context
         )
@@ -47,6 +46,7 @@ class SchemaValidator:
             return report
 
         # Perform predicate evaluation using the registry
+        logger.debug(f"Evaluating predicates for schema: {schema.semantical_name} at path: {target_path}")
         predicate_report = SchemaValidator._evaluate_predicates(schema, target_path, registry)
         report.add_results(predicate_report.results)
 
@@ -82,7 +82,7 @@ class SchemaValidator:
     @staticmethod
     def _validate_structure(
         schema: SchemaNode,
-        target_path: Path,
+        target_path: str,
         registry: NodeRegistry,
         execute_actions: bool = False,
         parent_contexts: Optional[list[ActionNodeContext]] = None,
@@ -102,6 +102,7 @@ class SchemaValidator:
         Returns:
             ValidationReport with structural validation results
         """
+        logger.debug(f"Validating structure for schema: {schema.semantical_name} at path: {target_path}")
         # Initialize parent_contexts and context if needed
         parent_contexts = parent_contexts or []
         context = context or {}
@@ -111,9 +112,11 @@ class SchemaValidator:
 
         # Run standard validation for this node
         node_report = SchemaValidator.validate_node(schema, target_path)
+        logger.debug(f"Validating node: {schema.semantical_name} at path: {target_path}")
         report.add_results(node_report.results)
 
         # Run any custom validators
+        logger.debug(f"Running custom validators for node: {schema.semantical_name} at path: {target_path}")
         custom_results = ValidatorRegistry.run_validators(schema, target_path)
         report.add_results(custom_results)
 
@@ -130,8 +133,8 @@ class SchemaValidator:
             process_node(schema, target_path, parent_contexts, context)
 
         # For directories, validate children
-        if isinstance(schema, SchemaDirectory) and target_path.is_dir():
-            child_paths = list(target_path.iterdir())
+        if isinstance(schema, SchemaDirectory) and schema.fs.isdir(target_path):
+            child_paths = schema.fs.ls(target_path)
 
             # Add current node to parent contexts before processing children
             parent_contexts.append((schema, target_path))
@@ -171,7 +174,7 @@ class SchemaValidator:
     @staticmethod
     def _evaluate_predicates(
         schema: SchemaNode,
-        target_path: Path,
+        target_path: str,
         registry: NodeRegistry,
     ) -> ValidationReport:
         """
@@ -188,7 +191,7 @@ class SchemaValidator:
         report = ValidationReport()
 
         # Find and evaluate all predicate nodes
-        def traverse_for_predicates(node: SchemaNode, path: Path) -> None:
+        def traverse_for_predicates(node: SchemaNode, path: str) -> None:
             if isinstance(node, SchemaPredicateNode):
                 # Evaluate this predicate
                 predicate_report = SchemaValidator.validate_predicate(node, path, registry)
@@ -198,7 +201,9 @@ class SchemaValidator:
             if isinstance(node, SchemaDirectory):
                 for child in node.children:
                     # Use the node's path to build the child path
-                    child_path = path / child.semantical_name if not isinstance(child, SchemaPredicateNode) else path
+                    child_path = (
+                        f"{path}/{child.semantical_name}" if not isinstance(child, SchemaPredicateNode) else path
+                    )
                     traverse_for_predicates(child, child_path)
 
         # Start traversal from the root schema
@@ -207,7 +212,7 @@ class SchemaValidator:
         return report
 
     @staticmethod
-    def validate_node(node: SchemaNode, path: Path) -> ValidationReport:
+    def validate_node(node: SchemaNode, path: str) -> ValidationReport:
         """
         Validate a path against a schema node.
 
@@ -226,6 +231,7 @@ class SchemaValidator:
             # Skip predicates during node validation, they're handled separately
             return ValidationReport()
         else:
+            logger.debug(f"Creating report for unknown schema node type: {type(node).__name__} at path: {path}")
             report = ValidationReport()
             report.add_result(
                 ValidationResult(
@@ -239,230 +245,110 @@ class SchemaValidator:
             return report
 
     @staticmethod
-    def validate_file(file_node: SchemaFile, path: Path) -> ValidationReport:
-        """Validate a path against a file schema."""
+    def validate_file(node: SchemaFile, path: str) -> ValidationReport:
+        """
+        Validate a file against a schema file node.
+
+        Args:
+            node: Schema file node to validate against
+            path: Path to validate
+
+        Returns:
+            ValidationReport with results
+        """
         report = ValidationReport()
-        context = {"node_name": file_node.semantical_name}
 
-        # Check if it's a file
-        is_file = path.is_file()
-        report.add_result(
-            ValidationResult(
-                is_valid=is_file,
-                node_origin=file_node.semantical_name,
-                message="" if is_file else f"Expected a file at {path}",
-                path=path,
-                validator_name="is_file",
-                context=context,
+        # Check if path exists and is a file
+        if not node.fs.isfile(path):
+            report.add_result(
+                ValidationResult(
+                    is_valid=False,
+                    node_origin=node.semantical_name,
+                    message=f"Path does not exist or is not a file: {path}",
+                    path=path,
+                    validator_name="file_exists",
+                )
             )
-        )
-
-        # If not a file, stop further validations
-        if not is_file:
             return report
 
-        # Check extension
-        if file_node.extension:
-            ext = file_node.extension if file_node.extension.startswith(".") else f".{file_node.extension}"
-            has_ext = path.suffix == ext
+        # Check file extension
+        if node.extension and not path.endswith(node.extension):
             report.add_result(
                 ValidationResult(
-                    is_valid=has_ext,
-                    node_origin=file_node.semantical_name,
-                    message="" if has_ext else f'Expected extension "{ext}", got "{path.suffix}"',
+                    is_valid=False,
+                    node_origin=node.semantical_name,
+                    message=f"File extension mismatch: expected {node.extension}, got {path.split('.')[-1]}",
                     path=path,
-                    validator_name="extension",
-                    context=context,
+                    validator_name="file_extension",
                 )
             )
 
-        # Check pattern
-        if file_node.pattern_validation:
-            matches_pattern = file_node.pattern_validation.fullmatch(path.stem) is not None
-            report.add_result(
-                ValidationResult(
-                    is_valid=matches_pattern,
-                    node_origin=file_node.semantical_name,
-                    message=""
-                    if matches_pattern
-                    else f'{path.name} doesn\'t match pattern "{file_node.pattern_validation.pattern}"',
-                    path=path,
-                    validator_name="pattern",
-                    context=context,
-                )
-            )
-
-        # Check permissions
-        if file_node.permissions:
-            try:
-                # Convert string permission (e.g., "0750") to integer
-                expected_mode = int(file_node.permissions, 8)
-                file_stat = path.stat()
-                file_mode = stat.S_IMODE(file_stat.st_mode)
-
-                has_permissions = file_mode == expected_mode
-                report.add_result(
-                    ValidationResult(
-                        is_valid=has_permissions,
-                        node_origin=file_node.semantical_name,
-                        message=""
-                        if has_permissions
-                        else f'Expected permissions "{oct(expected_mode)}", got "{oct(file_mode)}"',
-                        path=path,
-                        validator_name="permissions",
-                        context=context,
-                    )
-                )
-            except ValueError:
+        # Check pattern validation if specified
+        if node.pattern_validation:
+            filename = path.split("/")[-1]
+            if not node.pattern_validation.match(filename):
                 report.add_result(
                     ValidationResult(
                         is_valid=False,
-                        node_origin=file_node.semantical_name,
-                        message=f'Invalid permission format: "{file_node.permissions}". Expected octal format like "0750"',
+                        node_origin=node.semantical_name,
+                        message=f"Filename does not match pattern: {node.pattern_validation.pattern}",
                         path=path,
-                        validator_name="permissions",
-                        context=context,
-                    )
-                )
-
-        # Check owner
-        if file_node.owner:
-            try:
-                file_owner = pwd.getpwuid(path.stat().st_uid).pw_name
-                has_owner = file_owner == file_node.owner
-                report.add_result(
-                    ValidationResult(
-                        is_valid=has_owner,
-                        node_origin=file_node.semantical_name,
-                        message="" if has_owner else f'Expected owner "{file_node.owner}", got "{file_owner}"',
-                        path=path,
-                        validator_name="owner",
-                        context=context,
-                    )
-                )
-            except KeyError:
-                # This can happen if the UID doesn't have a mapping in the password database
-                uid = path.stat().st_uid
-                report.add_result(
-                    ValidationResult(
-                        is_valid=False,
-                        node_origin=file_node.semantical_name,
-                        message=f'Could not resolve owner for UID {uid}. Expected "{file_node.owner}"',
-                        path=path,
-                        validator_name="owner",
-                        context=context,
+                        validator_name="file_pattern",
                     )
                 )
 
         return report
 
     @staticmethod
-    def validate_directory(dir_node: SchemaDirectory, path: Path) -> ValidationReport:
-        """Validate a path against a directory schema."""
+    def validate_directory(node: SchemaDirectory, path: str) -> ValidationReport:
+        """
+        Validate a directory against a schema directory node.
+
+        Args:
+            node: Schema directory node to validate against
+            path: Path to validate
+
+        Returns:
+            ValidationReport with results
+        """
         report = ValidationReport()
-        context = {"node_name": dir_node.semantical_name}
 
-        # Check if it's a directory
-        is_dir = path.is_dir()
-        report.add_result(
-            ValidationResult(
-                is_valid=is_dir,
-                node_origin=dir_node.semantical_name,
-                message="" if is_dir else f"Expected a directory at {path}",
-                path=path,
-                validator_name="is_directory",
-                context=context,
-            )
-        )
-
-        # If not a directory, stop further validations
-        if not is_dir:
-            return report
-
-        # Check pattern
-        if dir_node.pattern_validation:
-            matches_pattern = dir_node.pattern_validation.fullmatch(path.name) is not None
+        # Check if path exists and is a directory
+        logger.debug(f"Checking if path exists and is a directory: {path}")
+        if not node.fs.isdir(path):
             report.add_result(
                 ValidationResult(
-                    is_valid=matches_pattern,
-                    message=""
-                    if matches_pattern
-                    else f'{path.name} doesn\'t match pattern "{dir_node.pattern_validation.pattern}"',
+                    is_valid=False,
+                    node_origin=node.semantical_name,
+                    message=f"Path does not exist or is not a directory: {path}",
                     path=path,
-                    validator_name="pattern",
-                    node_origin=dir_node.semantical_name,
-                    context=context,
+                    validator_name="directory_exists",
                 )
             )
+            return report
 
-        # Check permissions
-        if dir_node.permissions:
-            try:
-                # Convert string permission (e.g., "0750") to integer
-                expected_mode = int(dir_node.permissions, 8)
-                dir_stat = path.stat()
-                dir_mode = stat.S_IMODE(dir_stat.st_mode)
-
-                has_permissions = dir_mode == expected_mode
-                report.add_result(
-                    ValidationResult(
-                        is_valid=has_permissions,
-                        node_origin=dir_node.semantical_name,
-                        message=""
-                        if has_permissions
-                        else f'Expected permissions "{oct(expected_mode)}", got "{oct(dir_mode)}"',
-                        path=path,
-                        validator_name="permissions",
-                        context=context,
-                    )
-                )
-            except ValueError:
+        # Check pattern validation if specified
+        if node.pattern_validation:
+            dirname = path.split("/")[-1]
+            if not node.pattern_validation.match(dirname):
+                logger.warning(f"Directory name does not match pattern: {node.pattern_validation.pattern}")
                 report.add_result(
                     ValidationResult(
                         is_valid=False,
-                        node_origin=dir_node.semantical_name,
-                        message=f'Invalid permission format: "{dir_node.permissions}". Expected octal format like "0750"',
+                        node_origin=node.semantical_name,
+                        message=f"Directory name does not match pattern: {node.pattern_validation.pattern}",
                         path=path,
-                        validator_name="permissions",
-                        context=context,
+                        validator_name="directory_pattern",
                     )
                 )
 
-        # Check owner
-        if dir_node.owner:
-            try:
-                dir_owner = pwd.getpwuid(path.stat().st_uid).pw_name
-                has_owner = dir_owner == dir_node.owner
-                report.add_result(
-                    ValidationResult(
-                        is_valid=has_owner,
-                        node_origin=dir_node.semantical_name,
-                        message="" if has_owner else f'Expected owner "{dir_node.owner}", got "{dir_owner}"',
-                        path=path,
-                        validator_name="owner",
-                        context=context,
-                    )
-                )
-            except KeyError:
-                # This can happen if the UID doesn't have a mapping in the password database
-                uid = path.stat().st_uid
-                report.add_result(
-                    ValidationResult(
-                        is_valid=False,
-                        node_origin=dir_node.semantical_name,
-                        message=f'Could not resolve owner for UID {uid}. Expected "{dir_node.owner}"',
-                        path=path,
-                        validator_name="owner",
-                        context=context,
-                    )
-                )
-
+        logger.debug(f"Directory {path} validated successfully against schema: {node.semantical_name}")
         return report
 
     @staticmethod
     def validate_predicate(
         predicate_node: SchemaPredicateNode,
-        path: Path,
+        path: str,
         registry: NodeRegistry,
     ) -> ValidationReport:
         """
@@ -497,7 +383,7 @@ class SchemaValidator:
             first_paths = registry.get_paths_by_name(first_element)
 
             # Filter to only include paths under the current directory
-            first_paths = [p for p in first_paths if path in p.parents or path == p.parent]
+            first_paths = [p for p in first_paths if path in p.split("/")[:-1] or path == "/".join(p.split("/")[:-1])]
 
             if not first_paths:
                 # No valid paths for first element, nothing to check
@@ -505,41 +391,33 @@ class SchemaValidator:
 
             base_names: set[str] = set()
             for p in first_paths:
-                base_names.add(p.stem)
+                base_names.add(p.split("/")[-1].split(".")[0])
 
-            # Check if other element types have matching base names
-            for element_name in predicate_node.elements[1:]:
-                element_paths = registry.get_paths_by_name(element_name)
+            # Check each base name against other elements
+            for base_name in base_names:
+                for element in predicate_node.elements[1:]:
+                    element_paths = registry.get_paths_by_name(element)
+                    element_paths = [
+                        p for p in element_paths if path in p.split("/")[:-1] or path == "/".join(p.split("/")[:-1])
+                    ]
 
-                # Filter to only include paths under the current directory
-                element_paths = [p for p in element_paths if path in p.parents or path == p.parent]
+                    # Check if there's a matching path for this element
+                    found_match = False
+                    for element_path in element_paths:
+                        element_base = element_path.split("/")[-1].split(".")[0]
+                        if element_base == base_name:
+                            found_match = True
+                            break
 
-                element_stems = {p.stem for p in element_paths}
-
-                # Find mismatches
-                missing_pairs = base_names - element_stems
-                if missing_pairs:
-                    missing_list = ", ".join(sorted(missing_pairs))
-                    report.add_result(
-                        ValidationResult(
-                            is_valid=False,
-                            node_origin=predicate_node.semantical_name,
-                            message=f"Missing paired {element_name} files for: {missing_list}",
-                            path=path,
-                            validator_name=f"pair_comparison_{predicate_node.semantical_name}",
+                    if not found_match:
+                        report.add_result(
+                            ValidationResult(
+                                is_valid=False,
+                                node_origin=predicate_node.semantical_name,
+                                message=f"Missing matching {element} for {first_element} with base name {base_name}",
+                                path=path,
+                                validator_name=predicate_node.semantical_name,
+                            )
                         )
-                    )
-
-        else:
-            # Unsupported predicate type
-            report.add_result(
-                ValidationResult(
-                    is_valid=False,
-                    node_origin=predicate_node.semantical_name,
-                    message=f"Unsupported predicate type: {predicate_node.predicate_type}",
-                    path=path,
-                    validator_name="predicate_validation",
-                )
-            )
 
         return report

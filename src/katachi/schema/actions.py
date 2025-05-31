@@ -8,23 +8,22 @@ when traversing the file system according to a schema.
 from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import Enum, auto
-from pathlib import Path
 from typing import Any, Callable, ClassVar, Optional
 
 from katachi.schema.schema_node import SchemaNode
 from katachi.validation.registry import NodeRegistry
 
 # Type definition for node context: tuple of (schema_node, path)
-NodeContext = tuple[SchemaNode, Path]
+NodeContext = tuple[SchemaNode, str]
 
 # Type for action callbacks: current node, path, parent contexts, and additional context
-ActionCallback = Callable[[SchemaNode, Path, Sequence[NodeContext], dict[str, Any]], None]
+ActionCallback = Callable[[SchemaNode, str, Sequence[NodeContext], dict[str, Any]], None]
 
 
 class ActionResult:
     """Represents the result of an action execution."""
 
-    def __init__(self, success: bool, message: str, path: Path, action_name: str):
+    def __init__(self, success: bool, message: str, path: str, action_name: str):
         """
         Initialize an action result.
 
@@ -47,97 +46,101 @@ class ActionResult:
 class ActionTiming(Enum):
     """When an action should be executed."""
 
-    DURING_VALIDATION = auto()  # Run during structure validation (old behavior)
-    AFTER_VALIDATION = auto()  # Run after all validation is complete (default new behavior)
+    DURING_VALIDATION = auto()
+    AFTER_VALIDATION = auto()
 
 
 @dataclass
 class ActionRegistration:
-    """Action registration details."""
+    """Registration information for an action."""
 
     callback: ActionCallback
     timing: ActionTiming
-    description: str
 
 
 class ActionRegistry:
-    """Registry for file and directory actions."""
+    """Registry for actions to be executed during schema validation."""
 
-    # Registry of callbacks by semantic name
-    _registry: ClassVar[dict[str, ActionRegistration]] = {}
+    _actions: ClassVar[dict[str, ActionRegistration]] = {}
 
     @classmethod
     def register(
         cls,
-        semantical_name: str,
-        callback: ActionCallback,
-        timing: ActionTiming = ActionTiming.AFTER_VALIDATION,
-        description: str = "",
-    ) -> None:
+        node_name: str,
+        timing: ActionTiming = ActionTiming.DURING_VALIDATION,
+    ) -> Callable:
         """
-        Register a callback for a specific schema node semantic name.
+        Register an action for a specific node.
 
         Args:
-            semantical_name: The semantic name to trigger the callback for
-            callback: Function to call when traversing a node with this semantic name
+            node_name: Name of the node to register the action for
             timing: When the action should be executed
-            description: Human-readable description of what the action does
+
+        Returns:
+            Decorator function
         """
-        cls._registry[semantical_name] = ActionRegistration(
-            callback=callback, timing=timing, description=description or f"Action for {semantical_name}"
-        )
+
+        def decorator(func: ActionCallback) -> ActionCallback:
+            cls._actions[node_name] = ActionRegistration(callback=func, timing=timing)
+            return func
+
+        return decorator
 
     @classmethod
-    def get(cls, semantical_name: str) -> Optional[ActionRegistration]:
-        """Get a registered action by semantical name."""
-        return cls._registry.get(semantical_name)
+    def get(cls, node_name: str) -> Optional[ActionRegistration]:
+        """
+        Get the registration for a node.
+
+        Args:
+            node_name: Name of the node to get the registration for
+
+        Returns:
+            ActionRegistration if found, None otherwise
+        """
+        return cls._actions.get(node_name)
 
     @classmethod
     def execute_actions(
         cls,
         registry: NodeRegistry,
         context: Optional[dict[str, Any]] = None,
-        timing: ActionTiming = ActionTiming.AFTER_VALIDATION,
+        timing: ActionTiming = ActionTiming.DURING_VALIDATION,
     ) -> list[ActionResult]:
         """
-        Execute all registered actions on validated nodes.
+        Execute all registered actions for a given timing.
 
         Args:
             registry: Registry of validated nodes
             context: Additional context data
-            timing: Which set of actions to execute based on timing
+            timing: Which actions to execute
 
         Returns:
             List of action results
         """
-        results = []
+        results: list[ActionResult] = []
         context = context or {}
 
-        # Get all semantical names from the registry
-        for semantical_name, registration in cls._registry.items():
-            # Skip actions that don't match the requested timing
+        for node_name, registration in cls._actions.items():
             if registration.timing != timing:
                 continue
 
-            # Get all nodes with this semantical name
-            node_contexts = registry.get_nodes_by_name(semantical_name)
-            for node_ctx in node_contexts:
+            # Get all contexts for this node type
+            node_contexts = registry.get_contexts_by_name(node_name)
+            for node_context in node_contexts:
                 try:
-                    # Get parent contexts
-                    parent_contexts = []
-                    for parent_path in node_ctx.parent_paths:
-                        parent_node_ctx = registry.get_node_by_path(parent_path)
-                        if parent_node_ctx:
-                            parent_contexts.append((parent_node_ctx.node, parent_node_ctx.path))
-
                     # Execute the action
-                    registration.callback(node_ctx.node, node_ctx.path, parent_contexts, context)
+                    registration.callback(
+                        node_context.node,
+                        node_context.path,
+                        [],
+                        context,
+                    )
                     results.append(
                         ActionResult(
                             success=True,
-                            message=f"Executed {registration.description}",
-                            path=node_ctx.path,
-                            action_name=semantical_name,
+                            message="Action executed successfully",
+                            path=node_context.path,
+                            action_name=node_name,
                         )
                     )
                 except Exception as e:
@@ -145,34 +148,17 @@ class ActionRegistry:
                         ActionResult(
                             success=False,
                             message=f"Action failed: {e!s}",
-                            path=node_ctx.path,
-                            action_name=semantical_name,
+                            path=node_context.path,
+                            action_name=node_name,
                         )
                     )
 
         return results
 
 
-# Legacy functions for backward compatibility
-def register_action(semantical_name: str, callback: ActionCallback) -> None:
-    """
-    Register a callback for a specific schema node semantic name.
-
-    Args:
-        semantical_name: The semantic name to trigger the callback for
-        callback: Function to call when traversing a node with this semantic name
-    """
-    ActionRegistry.register(
-        semantical_name,
-        callback,
-        timing=ActionTiming.DURING_VALIDATION,
-        description=f"Legacy action for {semantical_name}",
-    )
-
-
 def process_node(
     node: SchemaNode,
-    path: Path,
+    path: str,
     parent_contexts: list[NodeContext],
     context: Optional[dict[str, Any]] = None,
 ) -> None:

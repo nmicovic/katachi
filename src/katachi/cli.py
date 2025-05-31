@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 from typing import Optional
 
 import typer
@@ -16,23 +15,15 @@ console = Console()
 
 
 @app.command()
-def describe(schema_path: Path, target_path: Optional[Path] = None) -> None:
+def describe(schema_path: str, target_path: Optional[str] = None) -> None:
     """
     Visualize and describe a schema file structure.
 
     Args:
-        schema_path: Path to the schema.yaml file
-        target_path: Optional path to the directory (used for schema resolution)
-
-    Returns:
-        None
+        schema_path: Path to the schema.yaml file (can include fsspec prefix, e.g., 'abfs://')
+        target_path: Optional path to the directory (can include fsspec prefix)
     """
     console.print(f"Describing schema: [bold cyan]{schema_path}[/]")
-
-    # If target_path is not provided, use the schema's parent directory
-    if target_path is None:
-        target_path = schema_path.parent
-        console.print(f"Using default target directory: [dim]{target_path}[/]")
 
     try:
         # Load the schema
@@ -50,8 +41,8 @@ def describe(schema_path: Path, target_path: Optional[Path] = None) -> None:
 
 @app.command()
 def validate(
-    schema_path: Path,
-    target_path: Path,
+    schema_path: str,
+    target_path: str,
     detail_report: bool = typer.Option(False, "--detail-report", help="Show detailed validation report"),
     execute_actions: bool = typer.Option(False, "--execute-actions", help="Execute actions during/after validation"),
     context_json: str = typer.Option(None, "--context", help="JSON string with context data for actions"),
@@ -60,14 +51,11 @@ def validate(
     Validates a directory structure against a schema.yaml file.
 
     Args:
-        schema_path: Path to the schema.yaml file
-        target_path: Path to the directory to validate
+        schema_path: Path to the schema.yaml file (can include fsspec prefix, e.g., 'abfs://')
+        target_path: Path to the directory to validate (can include fsspec prefix)
         detail_report: Whether to show a detailed validation report
         execute_actions: Whether to execute registered actions
         context_json: JSON string with context data for actions
-
-    Returns:
-        None
     """
     console.print(f"Validating schema [bold cyan]{schema_path}[/] against directory [bold cyan]{target_path}[/]")
 
@@ -75,6 +63,7 @@ def validate(
     schema = load_schema(schema_path, target_path)
     if schema is None:
         return
+    console.print(Panel("Schema loaded successfully", title="Info", border_style="green", expand=False))
 
     # Parse context JSON if provided
     context = None

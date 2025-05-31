@@ -6,7 +6,6 @@ that have passed validation, to support cross-level predicate evaluation.
 """
 
 from collections.abc import Iterator
-from pathlib import Path
 from typing import Optional
 
 from katachi.schema.schema_node import SchemaNode
@@ -15,7 +14,7 @@ from katachi.schema.schema_node import SchemaNode
 class NodeContext:
     """Context information about a validated node."""
 
-    def __init__(self, node: SchemaNode, path: Path, parent_paths: Optional[list[Path]] = None):
+    def __init__(self, node: SchemaNode, path: str, parent_paths: Optional[list[str]] = None):
         """
         Initialize a node context.
 
@@ -40,11 +39,11 @@ class NodeRegistry:
         # Dictionary mapping semantical names to lists of node contexts
         self._nodes_by_name: dict[str, list[NodeContext]] = {}
         # Dictionary mapping paths to node contexts
-        self._nodes_by_path: dict[Path, NodeContext] = {}
+        self._nodes_by_path: dict[str, NodeContext] = {}
         # Set of directories that have been processed
-        self._processed_dirs: set[Path] = set()
+        self._processed_dirs: set[str] = set()
 
-    def register_node(self, node: SchemaNode, path: Path, parent_paths: Optional[list[Path]] = None) -> None:
+    def register_node(self, node: SchemaNode, path: str, parent_paths: Optional[list[str]] = None) -> None:
         """
         Register a node that passed validation.
 
@@ -63,7 +62,7 @@ class NodeRegistry:
         # Register by path
         self._nodes_by_path[path] = context
 
-    def register_processed_dir(self, dir_path: Path) -> None:
+    def register_processed_dir(self, dir_path: str) -> None:
         """
         Register a directory as processed.
 
@@ -72,7 +71,7 @@ class NodeRegistry:
         """
         self._processed_dirs.add(dir_path)
 
-    def is_dir_processed(self, dir_path: Path) -> bool:
+    def is_dir_processed(self, dir_path: str) -> bool:
         """
         Check if a directory has been processed.
 
@@ -84,65 +83,47 @@ class NodeRegistry:
         """
         return dir_path in self._processed_dirs
 
-    def get_nodes_by_name(self, semantical_name: str) -> list[NodeContext]:
+    def get_paths_by_name(self, name: str) -> list[str]:
         """
-        Get all nodes with a given semantical name.
+        Get all paths registered for a given semantical name.
 
         Args:
-            semantical_name: The semantical name to look up
+            name: Semantical name to look up
 
         Returns:
-            List of node contexts with the given semantical name
+            List of paths registered for this name
         """
-        return self._nodes_by_name.get(semantical_name, [])
+        return [context.path for context in self._nodes_by_name.get(name, [])]
 
-    def get_node_by_path(self, path: Path) -> Optional[NodeContext]:
+    def get_context_by_path(self, path: str) -> Optional[NodeContext]:
         """
-        Get a node by its path.
+        Get the context for a specific path.
 
         Args:
-            path: The path to look up
+            path: Path to look up
 
         Returns:
-            Node context for the path, or None if not found
+            NodeContext if found, None otherwise
         """
         return self._nodes_by_path.get(path)
 
-    def get_nodes_under_path(self, base_path: Path) -> Iterator[NodeContext]:
+    def get_contexts_by_name(self, name: str) -> list[NodeContext]:
         """
-        Get all nodes under a given path.
+        Get all contexts registered for a given semantical name.
 
         Args:
-            base_path: The base path to filter by
+            name: Semantical name to look up
 
         Returns:
-            Iterator of node contexts under the given path
+            List of NodeContext objects for this name
         """
-        for path, context in self._nodes_by_path.items():
-            try:
-                if base_path in path.parents or path == base_path:
-                    yield context
-            except ValueError:
-                # This happens if paths are on different drives
-                continue
+        return self._nodes_by_name.get(name, [])
 
-    def get_paths_by_name(self, semantical_name: str) -> list[Path]:
+    def iter_contexts(self) -> Iterator[NodeContext]:
         """
-        Get all paths with a given semantical name.
-
-        Args:
-            semantical_name: The semantical name to look up
+        Iterate over all registered contexts.
 
         Returns:
-            List of paths with the given semantical name
+            Iterator over all NodeContext objects
         """
-        return [context.path for context in self.get_nodes_by_name(semantical_name)]
-
-    def clear(self) -> None:
-        """Clear the registry."""
-        self._nodes_by_name.clear()
-        self._nodes_by_path.clear()
-        self._processed_dirs.clear()
-
-    def __str__(self) -> str:
-        return f"NodeRegistry with {len(self._nodes_by_path)} nodes of {len(self._nodes_by_name)} types"
+        return iter(self._nodes_by_path.values())

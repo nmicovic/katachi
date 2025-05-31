@@ -143,34 +143,83 @@ def _add_failed_validations(path_node: Tree, results: list[ValidationResult]) ->
             failed_node.add(f"[red]✗[/] [{f.validator_name}] {f.message}")
 
 
-def display_validation_results(validation_report: ValidationReport, detail_report: bool = False) -> None:
+def display_validation_results(report: ValidationReport, detail_report: bool = False) -> None:
     """
-    Display validation results to the console.
+    Display validation results in a formatted way.
 
     Args:
-        validation_report: ValidationReport object
+        report: The validation report to display
         detail_report: Whether to show a detailed report
-
-    Returns:
-        None
     """
-    if validation_report.is_valid():
-        console.print(
-            Panel("Validation successful! All checks passed.", title="Success", border_style="green", expand=False)
-        )
+    if report.is_valid():
+        console.print(Panel("✅ All validations passed successfully!", style="green"))
         return
 
-    # Display failure summary
-    console.print(Panel("Validation failed! See details below.", title="Error", border_style="red", expand=False))
+    # Create a table for the results
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Status", style="dim")
+    table.add_column("Path")
+    table.add_column("Message")
 
-    # Get invalid results
-    failures = [r for r in validation_report.results if not r.is_valid]
+    # Add all results to the table
+    for result in report.results:
+        status = "✅" if result.is_valid else "❌"
+        style = "green" if result.is_valid else "red"
+        table.add_row(status, result.path, result.message, style=style)
 
-    # Show the failures by default
-    failures_table = create_failures_table(failures)
-    console.print(Panel(failures_table, title="Validation Failures", border_style="red", expand=False))
+    # Display the table
+    console.print(table)
 
-    # If detailed report is requested, show all validations including passed ones
+    # If detailed report is requested, show additional information
     if detail_report:
-        detailed_tree = create_detailed_report_tree(validation_report)
-        console.print(Panel(detailed_tree, title="Detailed Report", border_style="blue", expand=False))
+        _display_detailed_report(report)
+
+
+def _display_detailed_report(report: ValidationReport) -> None:
+    """
+    Display a detailed validation report.
+
+    Args:
+        report: The validation report to display
+    """
+    # Group results by validator
+    validator_results: dict[str, list[ValidationResult]] = {}
+    for result in report.results:
+        if result.validator_name not in validator_results:
+            validator_results[result.validator_name] = []
+        validator_results[result.validator_name].append(result)
+
+    # Display results by validator
+    for validator_name, results in validator_results.items():
+        console.print(Panel(f"Validator: {validator_name}", style="bold blue"))
+
+        # Create a table for this validator's results
+        table = Table(show_header=True, header_style="bold")
+        table.add_column("Status", style="dim")
+        table.add_column("Path")
+        table.add_column("Message")
+        table.add_column("Node")
+
+        # Add results to the table
+        for result in results:
+            status = "✅" if result.is_valid else "❌"
+            style = "green" if result.is_valid else "red"
+            table.add_row(status, result.path, result.message, result.node_origin, style=style)
+
+        console.print(table)
+
+    # Display any action results if present
+    if "action_results" in report.context:
+        console.print(Panel("Action Results", style="bold yellow"))
+        action_table = Table(show_header=True, header_style="bold")
+        action_table.add_column("Status", style="dim")
+        action_table.add_column("Validator")
+        action_table.add_column("Path")
+        action_table.add_column("Message")
+
+        for result in report.context["action_results"]:
+            status = "✅" if result.is_valid else "❌"
+            style = "green" if result.is_valid else "red"
+            action_table.add_row(status, result.validator_name, result.path, result.message, style=style)
+
+        console.print(action_table)
