@@ -92,6 +92,21 @@ Validate paired files (e.g., ensure each .jpg has a matching .json file):
 katachi validate "tests/schema_tests/test_paired_files/schema.yaml" "tests/schema_tests/test_paired_files/data"
 ```
 
+Validate Azure Blob Storage:
+```bash
+# Set Azure credentials in environment variables
+export AZURE_STORAGE_ACCOUNT="your_storage_account"
+export AZURE_STORAGE_ACCESS_KEY="your_access_key"
+# Or use SAS token
+export AZURE_STORAGE_SAS_TOKEN="your_sas_token"
+
+# Validate local schema against Azure Blob Storage
+katachi validate "schema.yaml" "abfs://container/path"
+
+# Validate schema in Azure Blob Storage against another Azure Blob Storage path
+katachi validate "abfs://container/schema.yaml" "abfs://container/path"
+```
+
 ## Python API
 
 ```python
@@ -106,6 +121,40 @@ schema = load_yaml(Path("schema.yaml"), Path("data_directory"))
 report = validate_schema(schema, Path("data_directory"))
 
 # Check if validation passed
+if report.is_valid():
+    print("Validation successful!")
+else:
+    print("Validation failed with the following issues:")
+    for result in report.results:
+        if not result.is_valid:
+            print(f"- {result.path}: {result.message}")
+```
+
+### Using Azure Blob Storage
+
+```python
+import os
+from katachi.schema.importer import load_yaml
+from katachi.schema.validate import validate_schema
+from katachi.utils.fs_utils import get_filesystem
+
+# Set Azure credentials
+os.environ["AZURE_STORAGE_ACCOUNT"] = "your_storage_account"
+os.environ["AZURE_STORAGE_ACCESS_KEY"] = "your_access_key"
+# Or use SAS token
+# os.environ["AZURE_STORAGE_SAS_TOKEN"] = "your_sas_token"
+
+# Get filesystem for Azure Blob Storage
+target_fs = get_filesystem("abfs://container/path")
+schema_fs = get_filesystem("abfs://container/schema.yaml")
+
+# Load schema from Azure Blob Storage
+schema = load_yaml("schema.yaml", "path", schema_fs, target_fs)
+
+# Validate Azure Blob Storage path against schema
+report = validate_schema(schema, "path", target_fs)
+
+# Check validation results
 if report.is_valid():
     print("Validation successful!")
 else:
