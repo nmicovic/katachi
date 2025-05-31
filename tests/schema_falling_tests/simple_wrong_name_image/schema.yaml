@@ -1,0 +1,7 @@
+semantical_name: root
+type: directory
+children:
+  - semantical_name: image_file
+    type: file
+    pattern_name: "\\d+"
+    extension: jpg
