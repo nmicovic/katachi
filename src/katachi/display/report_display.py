@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Optional
 
 from rich import box
 from rich.console import Console
@@ -143,7 +144,9 @@ def _add_failed_validations(path_node: Tree, results: list[ValidationResult]) ->
             failed_node.add(f"[red]✗[/] [{f.validator_name}] {f.message}")
 
 
-def display_validation_results(report: ValidationReport, detail_report: bool = False) -> None:
+def display_validation_results(
+    report: ValidationReport, detail_report: bool = False, report_length: Optional[int] = None
+) -> None:
     """
     Display validation results in a formatted way.
 
@@ -161,14 +164,28 @@ def display_validation_results(report: ValidationReport, detail_report: bool = F
     table.add_column("Path")
     table.add_column("Message")
 
+    clipped_results = False
+    displayed_count = 0
+
     # Add all results to the table
-    for result in report.results:
+    for i, result in enumerate(report.results):
         status = "✅" if result.is_valid else "❌"
         style = "green" if result.is_valid else "red"
         table.add_row(status, result.path, result.message, style=style)
+        displayed_count += 1
+        if report_length and i >= report_length - 1:
+            clipped_results = True
+            break
 
     # Display the table
     console.print(table)
+
+    if not report_length and clipped_results:
+        skipped_count = len(report.results) - displayed_count
+        console.print(
+            f"Showing first {displayed_count} results, skipped {skipped_count} more results. Use --report-length to limit output."
+        )
+        print("WTF")
 
     # If detailed report is requested, show additional information
     if detail_report:

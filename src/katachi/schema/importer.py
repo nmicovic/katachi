@@ -42,22 +42,19 @@ def load_yaml(
 
             # Important: For the root node, we use the target_path directly
             # instead of constructing a path based on the schema node name
-            return _parse_node(data, target_path, target_fs, is_root=True)
+            return _parse_node(data, target_path, is_root=True)
     except Exception:
         logger.exception(f"Failed to load schema file {schema_path}")
         return None
 
 
-def _parse_node(
-    node_data: dict[str, Any], parent_path: str, fs: AbstractFileSystem, is_root: bool = False
-) -> Optional[SchemaNode]:
+def _parse_node(node_data: dict[str, Any], parent_path: str, is_root: bool = False) -> Optional[SchemaNode]:
     """
     Recursively parse a node from the YAML data.
 
     Args:
         node_data: Dictionary containing the node data from YAML
         parent_path: Path to the parent directory
-        fs: Filesystem to use for this node
         is_root: Whether this node is the root node of the schema
 
     Returns:
@@ -77,6 +74,7 @@ def _parse_node(
     pattern_name = node_data.get("pattern_name")
     permissions = node_data.get("permissions")
     owner = node_data.get("owner")
+    metadata = node_data.get("metadata")
 
     # For root node, use parent_path directly instead of appending the name
     # This makes the validation work with the actual directory structure
@@ -88,10 +86,10 @@ def _parse_node(
         return SchemaFile(
             path=node_path,
             semantical_name=semantical_name,
-            fs=fs,
             extension=extension,
             description=description,
             pattern_validation=pattern_name,
+            metadata=metadata,
             permissions=permissions,
             owner=owner,
         )
@@ -100,9 +98,9 @@ def _parse_node(
         directory = SchemaDirectory(
             path=node_path,
             semantical_name=semantical_name,
-            fs=fs,
             description=description,
             pattern_validation=pattern_name,
+            metadata=metadata,
             permissions=permissions,
             owner=owner,
         )
@@ -111,7 +109,7 @@ def _parse_node(
         children = node_data.get("children", [])
         for child_data in children:
             # Child nodes are never root nodes
-            child_node = _parse_node(child_data, node_path, fs)
+            child_node = _parse_node(child_data, node_path)
             if child_node:
                 directory.add_child(child_node)
             else:
@@ -135,10 +133,10 @@ def _parse_node(
         return SchemaPredicateNode(
             path=node_path,
             semantical_name=semantical_name,
-            fs=fs,
             predicate_type=predicate_type,
             elements=elements,
             description=description,
+            metadata=metadata,
             permissions=permissions,
             owner=owner,
         )

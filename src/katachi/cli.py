@@ -7,6 +7,7 @@ from rich.panel import Panel
 
 from katachi.display.report_display import display_validation_results
 from katachi.display.schema_display import create_schema_tree
+from katachi.utils.fs_utils import get_filesystem
 from katachi.utils.schema_loader import load_schema
 from katachi.validation.validators import SchemaValidator
 
@@ -45,6 +46,11 @@ def validate(
     target_path: str,
     detail_report: bool = typer.Option(False, "--detail-report", help="Show detailed validation report"),
     execute_actions: bool = typer.Option(False, "--execute-actions", help="Execute actions during/after validation"),
+    report_length: int = typer.Option(
+        40,
+        "--report-length",
+        help="When showing detailed report, show at most N items.",
+    ),
     context_json: str = typer.Option(None, "--context", help="JSON string with context data for actions"),
 ) -> None:
     """
@@ -55,13 +61,15 @@ def validate(
         target_path: Path to the directory to validate (can include fsspec prefix)
         detail_report: Whether to show a detailed validation report
         execute_actions: Whether to execute registered actions
+        report_length: When showing detailed report, show at most N items
         context_json: JSON string with context data for actions
     """
     console.print(f"Validating schema [bold cyan]{schema_path}[/] against directory [bold cyan]{target_path}[/]")
 
     # Load the schema
     schema = load_schema(schema_path, target_path)
-    if schema is None:
+    if not schema:
+        console.print(Panel("Failed to load schema!", title="Error", border_style="red", expand=False))
         return
     console.print(Panel("Schema loaded successfully", title="Info", border_style="green", expand=False))
 
@@ -74,15 +82,18 @@ def validate(
             console.print(Panel("Invalid JSON in context parameter", title="Error", border_style="red", expand=False))
             return
 
+    # Get filesystem for target path
+    target_fs, target_path_without_prefix = get_filesystem(target_path)
+
     # Validate the directory structure against the schema
     validation_report = SchemaValidator.validate_schema(
-        schema, target_path, execute_actions=execute_actions, context=context
+        schema, target_path_without_prefix, target_fs, execute_actions=execute_actions, context=context
     )
 
     validation_report.sort_by_longest_path()
 
     # Display the results
-    display_validation_results(validation_report, detail_report)
+    display_validation_results(validation_report, detail_report, report_length)
 
     # Exit with error code if validation failed
     if not validation_report.is_valid():

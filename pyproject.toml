@@ -92,6 +92,11 @@ disable_error_code = ["no-any-unimported", "arg-type"]
 module = "katachi/utils/fs_utils"
 disable_error_code = ["no-any-unimported", "arg-type"]
 
+[[tool.mypy.overrides]]
+# Adding this due to fsspec and adlfs not having type stubs.
+module = "katachi/validation/validators"
+disable_error_code = ["no-any-unimported", "arg-type"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
