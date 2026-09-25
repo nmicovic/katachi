@@ -1,0 +1,36 @@
+name: Katachi
+description: Validate a directory structure against a Katachi schema, with problems shown as annotations
+branding:
+  icon: folder
+  color: orange
+inputs:
+  schema:
+    description: Path or URL of the schema file
+    required: true
+  path:
+    description: Directory to validate
+    required: false
+    default: "."
+  version:
+    description: Katachi version to install (default: the version of this action)
+    required: false
+    default: ""
+  extra-args:
+    description: Extra arguments for `katachi validate`, e.g. "--strict --ignore .*"
+    required: false
+    default: ""
+runs:
+  using: composite
+  steps:
+    - uses: astral-sh/setup-uv@v6
+    - name: katachi validate
+      shell: bash
+      env:
+        KATACHI_SCHEMA: ${{ inputs.schema }}
+        KATACHI_PATH: ${{ inputs.path }}
+        KATACHI_VERSION: ${{ inputs.version }}
+        KATACHI_EXTRA_ARGS: ${{ inputs.extra-args }}
+      run: |
+        if [ -n "$KATACHI_VERSION" ]; then spec="katachi==$KATACHI_VERSION"; else spec="$GITHUB_ACTION_PATH"; fi
+        # shellcheck disable=SC2086
+        uvx --from "$spec" katachi validate "$KATACHI_SCHEMA" "$KATACHI_PATH" --format github $KATACHI_EXTRA_ARGS

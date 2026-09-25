@@ -23,14 +23,20 @@ test: ## Test the code with pytest
 
 .PHONY: schema-test
 schema-test: ## Run schema validation tests
-	# @echo "🚀 Running schema validation tests"
-	# @uv run python -m pytest tests/test_schema_validation.py -v
 	@echo "🚀 Running CLI validation commands"
 	@uv run python -m katachi validate "tests/schema_tests/test_sanity/schema.yaml" "tests/schema_tests/test_sanity/dataset"
 	@uv run python -m katachi validate "tests/schema_tests/test_depth_1/schema.yaml" "tests/schema_tests/test_depth_1/dataset"
 	@uv run python -m katachi validate "tests/schema_tests/test_paired_files/schema.yaml" "tests/schema_tests/test_paired_files/data"
 	@uv run python -m katachi validate "tests/schema_tests/test_depth_2/schema.yaml" "tests/schema_tests/test_depth_2/dataset_root"
 	@uv run python -m katachi validate "tests/schema_tests/test_ambiguous_dirs/schema.yaml" "tests/schema_tests/test_ambiguous_dirs/root"
+
+.PHONY: bench
+bench: ## Run the benchmark (100k files)
+	@uv run python benchmarks/bench.py --dirs 200 --files 250
+
+.PHONY: json-schema
+json-schema: ## Regenerate katachi.schema.json
+	@uv run katachi json-schema > katachi.schema.json
 
 .PHONY: build
 build: clean-build ## Build wheel file

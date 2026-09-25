@@ -1,30 +1,37 @@
 [project]
 name = "katachi"
-version = "0.0.2"
-description = "Python package for validating, processing and parsing directories."
+version = "0.1.0"
+description = "Validate, process and document directory structures (local, S3, Azure, ...) against YAML schemas."
 authors = [{ name = "Nemanja Micovic", email = "contact.nmicovic@protonmail.com" }]
 readme = "README.md"
-keywords = ['python']
-requires-python = ">=3.9,<4.0"
+keywords = ['directory', 'filesystem', 'schema', 'validation', 'dataset', 'linter', 'fsspec', 'structure']
+requires-python = ">=3.10,<4.0"
 classifiers = [
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: System :: Filesystems",
+    "Typing :: Typed",
 ]
 dependencies = [
-    "adlfs>=2024.12.0",
     "fsspec>=2025.5.1",
     "loguru>=0.7.3",
     "pyyaml>=6.0.2",
     "rich>=14.0.0",
     "typer>=0.15.3",
 ]
+
+[project.optional-dependencies]
+azure = ["adlfs>=2024.12.0"]
 
 [project.urls]
 Homepage = "https://nmicovic.github.io/katachi/"
@@ -47,6 +54,8 @@ dev = [
     "mkdocs-material>=8.5.10",
     "mkdocstrings[python]>=0.26.1",
     "types-pyyaml>=6.0.12.20250402",
+    "jsonschema>=4.23",
+    "hypothesis>=6.100",
 ]
 
 [build-system]
@@ -78,30 +87,22 @@ follow_imports = "skip"
 disable_error_code = ["import-untyped", "no-any-unimported", "union-attr"]
 
 [[tool.mypy.overrides]]
-# Adding this due to ffspec not having type stubs.
-module = "katachi/schema/schema_node"
+# fsspec has no type stubs, so arguments typed as AbstractFileSystem become Any
+module = [
+    "katachi.schema.importer",
+    "katachi.schema.infer",
+    "katachi.utils.fs_utils",
+    "katachi.validation.snapshot",
+    "katachi.validation.validators",
+    "katachi",
+]
 disable_error_code = ["no-any-unimported"]
-
-[[tool.mypy.overrides]]
-# Adding this due to fsspec and adlfs not having type stubs.
-module = "katachi/schema/importer"
-disable_error_code = ["no-any-unimported", "arg-type"]
-
-[[tool.mypy.overrides]]
-# Adding this due to fsspec and adlfs not having type stubs.
-module = "katachi/utils/fs_utils"
-disable_error_code = ["no-any-unimported", "arg-type"]
-
-[[tool.mypy.overrides]]
-# Adding this due to fsspec and adlfs not having type stubs.
-module = "katachi/validation/validators"
-disable_error_code = ["no-any-unimported", "arg-type"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 fix = true
 
@@ -143,10 +144,17 @@ ignore = [
     "E501",
     # DoNotAssignLambda
     "E731",
+    # Long exception messages are how Katachi explains schema errors
+    "TRY003",
 ]
 
+[tool.ruff.lint.mccabe]
+# The matching hot loop is intentionally inlined for performance
+max-complexity = 16
+
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]
+"tests/*" = ["S101", "S108"]
+"benchmarks/*" = ["S101", "S108", "C901"]
 
 [tool.ruff.format]
 preview = true
@@ -159,4 +167,4 @@ branch = true
 source = ["src"]
 
 [tool.deptry.per_rule_ignores]
-DEP002 = ["fsspec", "adlfs"]
+DEP002 = ["adlfs"]

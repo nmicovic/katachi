@@ -1,7 +1,7 @@
 site_name: katachi
 repo_url: https://github.com/nmicovic/katachi
 site_url: https://nmicovic.github.io/katachi
-site_description: Python package for validating, processing and parsing directories.
+site_description: Validate directory structures (local, S3, Azure, ...) against YAML schemas.
 site_author: Nemanja Micovic
 edit_uri: edit/main/docs/
 repo_name: nmicovic/katachi
@@ -9,7 +9,12 @@ copyright: Maintained by <a href="https://nmicovic.com">nmicovic</a>.
 
 nav:
   - Home: index.md
-  - Modules: modules.md
+  - Schema reference: schema.md
+  - Command line & CI: cli.md
+  - Python API & extending: extending.md
+  - Performance: performance.md
+  - API reference: modules.md
+  - Changelog: changelog.md
 plugins:
   - search
   - mkdocstrings:
@@ -57,3 +62,5 @@ markdown_extensions:
   - pymdownx.inlinehilite
   - pymdownx.snippets
   - pymdownx.superfences
+  - tables
+  - admonition
