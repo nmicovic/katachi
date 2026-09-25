@@ -1,0 +1,52 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nmicovic/katachi/main/katachi.schema.json
+# Project layout from cookiecutter-data-science (https://cookiecutter-data-science.drivendata.org)
+semantical_name: data_science_project
+type: directory
+ignore: [".*", "__pycache__", "*.egg-info"]
+allow_extra: true   # other top-level files (pyproject.toml, Makefile, ...) are fine
+children:
+  - semantical_name: readme
+    type: file
+    pattern_name: README
+    extension: .md
+    required: true
+  - semantical_name: data
+    type: directory
+    pattern_name: data
+    required: true
+    children:
+      - semantical_name: raw_data
+        type: directory
+        pattern_name: raw
+        required: true
+        severity: warning
+      - semantical_name: data_stage
+        type: directory
+        pattern_name: interim|processed|external
+        allow_extra: true
+        children:
+          - semantical_name: gitkeep
+            type: file
+            pattern_name: \.gitkeep
+  - semantical_name: notebooks
+    type: directory
+    pattern_name: notebooks
+    required: true
+    children:
+      - semantical_name: notebook
+        type: file
+        pattern_name: "\\d+\\.\\d+-[a-z]+-[a-z0-9-]+"
+        extension: .ipynb
+        description: "<step>-<initials>-<description>.ipynb, e.g. 1.0-jqp-initial-data-exploration.ipynb"
+  - semantical_name: models
+    type: directory
+    pattern_name: models
+    allow_extra: true
+  - semantical_name: reports
+    type: directory
+    pattern_name: reports
+    allow_extra: true
+    children:
+      - semantical_name: figures
+        type: directory
+        pattern_name: figures

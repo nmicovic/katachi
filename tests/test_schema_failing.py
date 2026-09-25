@@ -13,7 +13,7 @@ FAILING_SCHEMA_TESTS = [
         desc="missing image: json file present instead of jpg",
         schema_path="tests/schema_falling_tests/simple_missing_image/schema.yaml",
         target_path="tests/schema_falling_tests/simple_missing_image/data",
-        expected_error="File extension mismatch: expected jpg, got json",
+        expected_error="File extension mismatch: expected .jpg, got .json",
     ),
     FailingSchemaCase(
         desc="wrong filename pattern: name should be digits only",

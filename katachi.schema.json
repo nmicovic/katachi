@@ -1,0 +1,331 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/nmicovic/katachi/main/katachi.schema.json",
+  "title": "Katachi schema",
+  "description": "Describes the expected structure of a directory tree, validated with `katachi validate`.",
+  "$ref": "#/$defs/node",
+  "$defs": {
+    "node": {
+      "type": "object",
+      "required": [
+        "type"
+      ],
+      "properties": {
+        "type": {
+          "enum": [
+            "directory",
+            "file",
+            "predicate"
+          ],
+          "description": "Kind of node."
+        }
+      },
+      "allOf": [
+        {
+          "type": "object",
+          "if": {
+            "properties": {
+              "type": {
+                "const": "directory"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "semantical_name": {
+                "type": "string",
+                "description": "Name of this node in the schema (used by predicates and actions)."
+              },
+              "type": {
+                "const": "directory",
+                "description": "Kind of node."
+              },
+              "description": {
+                "type": "string",
+                "description": "Human readable description, shown by `katachi describe`."
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Free-form data available to custom validators and actions."
+              },
+              "severity": {
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ],
+                "description": "Severity of count/predicate violations of this node. Only errors fail validation."
+              },
+              "pattern_name": {
+                "type": "string",
+                "description": "Regular expression the whole name must match (for files: the name without extension). Named groups (?P<id>...) can be referenced as {id} in descendant patterns."
+              },
+              "name_case": {
+                "enum": [
+                  "snake_case",
+                  "kebab-case",
+                  "camelCase",
+                  "PascalCase",
+                  "SCREAMING_SNAKE_CASE",
+                  "lowercase",
+                  "UPPERCASE"
+                ],
+                "description": "Naming convention the name must follow."
+              },
+              "permissions": {
+                "type": "string",
+                "pattern": "^(0o|0)?[0-7]{3}$",
+                "description": "Octal permissions, e.g. \"0750\"."
+              },
+              "owner": {
+                "type": "string",
+                "description": "Expected owner (user name or numeric uid)."
+              },
+              "required": {
+                "type": "boolean",
+                "description": "At least one matching entry must exist (same as min_count: 1)."
+              },
+              "min_count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minimum number of matching entries in each parent directory."
+              },
+              "max_count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Maximum number of matching entries in each parent directory."
+              },
+              "children": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/$defs/node"
+                },
+                "description": "Entries of this directory."
+              },
+              "ignore": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Glob patterns of entry names to skip in this directory."
+              },
+              "allow_extra": {
+                "type": "boolean",
+                "description": "Allow entries that match none of the children."
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "object",
+          "if": {
+            "properties": {
+              "type": {
+                "const": "file"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "semantical_name": {
+                "type": "string",
+                "description": "Name of this node in the schema (used by predicates and actions)."
+              },
+              "type": {
+                "const": "file",
+                "description": "Kind of node."
+              },
+              "description": {
+                "type": "string",
+                "description": "Human readable description, shown by `katachi describe`."
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Free-form data available to custom validators and actions."
+              },
+              "severity": {
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ],
+                "description": "Severity of count/predicate violations of this node. Only errors fail validation."
+              },
+              "pattern_name": {
+                "type": "string",
+                "description": "Regular expression the whole name must match (for files: the name without extension). Named groups (?P<id>...) can be referenced as {id} in descendant patterns."
+              },
+              "name_case": {
+                "enum": [
+                  "snake_case",
+                  "kebab-case",
+                  "camelCase",
+                  "PascalCase",
+                  "SCREAMING_SNAKE_CASE",
+                  "lowercase",
+                  "UPPERCASE"
+                ],
+                "description": "Naming convention the name must follow."
+              },
+              "permissions": {
+                "type": "string",
+                "pattern": "^(0o|0)?[0-7]{3}$",
+                "description": "Octal permissions, e.g. \"0750\"."
+              },
+              "owner": {
+                "type": "string",
+                "description": "Expected owner (user name or numeric uid)."
+              },
+              "required": {
+                "type": "boolean",
+                "description": "At least one matching entry must exist (same as min_count: 1)."
+              },
+              "min_count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minimum number of matching entries in each parent directory."
+              },
+              "max_count": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Maximum number of matching entries in each parent directory."
+              },
+              "extension": {
+                "oneOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                ],
+                "description": "Accepted extension(s), e.g. \".jpg\" or [\".jpg\", \".png\"]."
+              },
+              "min_size": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Minimum file size in bytes."
+              },
+              "max_size": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Maximum file size in bytes."
+              }
+            },
+            "required": [
+              "type"
+            ],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "object",
+          "if": {
+            "properties": {
+              "type": {
+                "const": "predicate"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "semantical_name": {
+                "type": "string",
+                "description": "Name of this node in the schema (used by predicates and actions)."
+              },
+              "type": {
+                "const": "predicate",
+                "description": "Kind of node."
+              },
+              "description": {
+                "type": "string",
+                "description": "Human readable description, shown by `katachi describe`."
+              },
+              "metadata": {
+                "type": "object",
+                "description": "Free-form data available to custom validators and actions."
+              },
+              "severity": {
+                "enum": [
+                  "error",
+                  "warning",
+                  "info"
+                ],
+                "description": "Severity of count/predicate violations of this node. Only errors fail validation."
+              },
+              "permissions": {
+                "type": "string",
+                "pattern": "^(0o|0)?[0-7]{3}$",
+                "description": "Octal permissions, e.g. \"0750\"."
+              },
+              "owner": {
+                "type": "string",
+                "description": "Expected owner (user name or numeric uid)."
+              },
+              "predicate_type": {
+                "type": "string",
+                "description": "Predicate to evaluate: pair_comparison, count_match, unique_keys or a registered one.",
+                "examples": [
+                  "pair_comparison",
+                  "count_match",
+                  "unique_keys"
+                ]
+              },
+              "elements": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "minItems": 1,
+                "description": "Semantical names of the nodes the predicate relates."
+              },
+              "options": {
+                "type": "object",
+                "description": "Predicate options that control how entries are paired up.",
+                "properties": {
+                  "key": {
+                    "type": "string",
+                    "description": "Key template, e.g. \"{split}/{stem}\" (captures, {stem}, {name})."
+                  },
+                  "key_pattern": {
+                    "type": "string",
+                    "description": "Regex extracting the key from the name (group 'key' or 1)."
+                  }
+                }
+              }
+            },
+            "required": [
+              "type",
+              "predicate_type",
+              "elements"
+            ],
+            "additionalProperties": false
+          }
+        }
+      ]
+    }
+  }
+}

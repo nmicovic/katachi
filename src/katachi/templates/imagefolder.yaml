@@ -1,0 +1,31 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nmicovic/katachi/main/katachi.schema.json
+# Image classification dataset (torchvision ImageFolder / Hugging Face imagefolder):
+#   <split>/<class_name>/<image>
+semantical_name: image_classification
+type: directory
+ignore: [".*"]
+children:
+  - semantical_name: split
+    type: directory
+    pattern_name: "(?P<split>train|validation|val|test)"
+    required: true
+    children:
+      - semantical_name: class_dir
+        type: directory
+        name_case: snake_case
+        min_count: 2
+        children:
+          - semantical_name: image
+            type: file
+            extension: [.jpg, .jpeg, .png]
+            min_count: 1
+            min_size: 1
+          - semantical_name: unique_images
+            type: predicate
+            predicate_type: unique_keys
+            description: The same image name must not appear twice in a class (e.g. a.jpg and a.png)
+            elements: [image]
+  - semantical_name: metadata
+    type: file
+    pattern_name: metadata
+    extension: [.csv, .jsonl]
