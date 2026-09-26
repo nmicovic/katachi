@@ -590,7 +590,10 @@ def test_schema_parse_regressions():
 
 
 def test_hidden_file_extension_message(tree):
-    schema = {"type": "directory", "children": [{"semantical_name": "a", "type": "file", "pattern_name": "a", "extension": ".txt"}]}
+    schema = {
+        "type": "directory",
+        "children": [{"semantical_name": "a", "type": "file", "pattern_name": "a", "extension": ".txt"}],
+    }
     report = run_validation(schema, tree(".DS_Store"))
     assert messages(report)[0] == "File extension mismatch: expected .txt, got no extension"
     assert "got '.DS_Store'" in messages(report)[1]
