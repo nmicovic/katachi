@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import time
+from enum import Enum
 from importlib import metadata, resources
 from pathlib import Path
 from typing import Annotated
@@ -13,7 +14,6 @@ from rich.console import Console
 from rich.panel import Panel
 
 from katachi.display.report_display import (
-    OUTPUT_FORMATS,
     display_validation_results,
     report_to_github,
     report_to_json,
@@ -22,7 +22,7 @@ from katachi.display.report_display import (
 from katachi.display.schema_display import create_schema_tree
 from katachi.schema.importer import SchemaError
 from katachi.utils.fs_utils import get_filesystem
-from katachi.utils.logger import set_log_level
+from katachi.utils.logger import logger, set_log_level
 from katachi.utils.plugins import PluginError, load_plugin
 from katachi.utils.schema_loader import load_schema_or_raise
 
@@ -37,7 +37,23 @@ err_console = Console(stderr=True)
 #: Exit codes: 0 = valid, 1 = validation failed, 2 = usage/schema/runtime error
 EXIT_OK, EXIT_INVALID, EXIT_ERROR = 0, 1, 2
 
-TEMPLATES = ("basic", "yolo", "imagefolder", "cookiecutter-data-science")
+
+class OutputFormat(str, Enum):
+    """Output formats of ``katachi validate`` (see ``display.report_display.OUTPUT_FORMATS``)."""
+
+    RICH = "rich"
+    TEXT = "text"
+    JSON = "json"
+    GITHUB = "github"
+
+
+class Template(str, Enum):
+    """Schema templates shipped in ``katachi/templates``."""
+
+    BASIC = "basic"
+    YOLO = "yolo"
+    IMAGEFOLDER = "imagefolder"
+    COOKIECUTTER_DATA_SCIENCE = "cookiecutter-data-science"
 
 
 def _fail(message: str, title: str = "Error") -> typer.Exit:
@@ -74,9 +90,9 @@ def validate(
     ],
     target_path: Annotated[str, typer.Argument(help="Directory to validate (local path or fsspec URL).")],
     output_format: Annotated[
-        str,
-        typer.Option("--format", "-f", help=f"Output format: {', '.join(OUTPUT_FORMATS)}."),
-    ] = "rich",
+        OutputFormat,
+        typer.Option("--format", "-f", help="Output format.", case_sensitive=False),
+    ] = OutputFormat.RICH,
     detail_report: Annotated[
         bool, typer.Option("--detail-report", help="Show statistics per rule and schema node, and actions.")
     ] = False,
@@ -110,9 +126,6 @@ def validate(
     """
     from katachi.validation.validators import SchemaValidator
 
-    if output_format not in OUTPUT_FORMATS:
-        raise _fail(f"Unknown format '{output_format}', expected one of: {', '.join(OUTPUT_FORMATS)}")
-
     context = None
     if context_json:
         try:
@@ -134,28 +147,33 @@ def validate(
     except (SchemaError, ValueError) as e:
         raise _fail(str(e), "Schema error" if isinstance(e, SchemaError) else "Error") from e
 
-    rich_output = output_format == "rich"
+    fmt = output_format.value
+    rich_output = fmt == "rich"
     if rich_output:
         console.print(f"Validating [bold cyan]{target_path}[/] against [bold cyan]{schema_path}[/]")
 
     start = time.perf_counter()
-    report = SchemaValidator.validate_schema(
-        schema,
-        target,
-        target_fs,
-        execute_actions=execute_actions,
-        context=context,
-        ignore=ignore or (),
-        workers=workers,
-    )
+    try:
+        report = SchemaValidator.validate_schema(
+            schema,
+            target,
+            target_fs,
+            execute_actions=execute_actions,
+            context=context,
+            ignore=ignore or (),
+            workers=workers,
+        )
+    except Exception as e:  # e.g. authentication or network errors from remote filesystems
+        logger.opt(exception=e).debug("Validation aborted")
+        raise _fail(f"Validation aborted: {type(e).__name__}: {e}\n(run with -v for details)") from e
     elapsed = time.perf_counter() - start
     report.sort_by_path()
 
     if rich_output:
         display_validation_results(report, detail_report, report_length, elapsed, out=console)
-    elif output_format == "json":
+    elif fmt == "json":
         typer.echo(report_to_json(report, elapsed))
-    elif output_format == "github":
+    elif fmt == "github":
         typer.echo(report_to_github(report))
     else:
         typer.echo(report_to_text(report, elapsed))
@@ -224,21 +242,19 @@ def infer(
 
 @app.command()
 def init(
-    template: Annotated[str, typer.Option("--template", "-t", help=f"One of: {', '.join(TEMPLATES)}.")] = "basic",
+    template: Annotated[Template, typer.Option("--template", "-t", help="Template to start from.")] = Template.BASIC,
     output: Annotated[Path, typer.Option("--output", "-o", help="File to create.")] = Path("katachi.yaml"),
     force: Annotated[bool, typer.Option("--force", help="Overwrite an existing file.")] = False,
     list_templates: Annotated[bool, typer.Option("--list", help="List available templates.")] = False,
 ) -> None:
     """Create a starter schema from a template (basic, yolo, imagefolder, cookiecutter-data-science)."""
     if list_templates:
-        for name in TEMPLATES:
-            typer.echo(name)
+        for name in Template:
+            typer.echo(name.value)
         return
-    if template not in TEMPLATES:
-        raise _fail(f"Unknown template '{template}', expected one of: {', '.join(TEMPLATES)}")
     if output.exists() and not force:
         raise _fail(f"{output} already exists (use --force to overwrite)")
-    text = resources.files("katachi.templates").joinpath(f"{template}.yaml").read_text()
+    text = resources.files("katachi.templates").joinpath(f"{template.value}.yaml").read_text()
     output.write_text(text)
     err_console.print(
         f"Created [bold cyan]{output}[/] from the '{template}' template. Next: katachi validate {output} <dir>"
@@ -255,3 +271,6 @@ def json_schema() -> None:
 
 if __name__ == "__main__":
     app()
+
+
+TEMPLATES = tuple(t.value for t in Template)

@@ -20,10 +20,16 @@ console = Console()
 OUTPUT_FORMATS = ("rich", "text", "json", "github")
 
 
+def _posix(path: str) -> str:
+    # fsspec reports local Windows paths as "C:/dir/file"; normalize native "C:\\dir\\file" the same way
+    return path.replace("\\", "/") if os.sep == "\\" else path
+
+
 def relative_path(path: str, root: str | None) -> str:
     """Show a path relative to the validated root (``.`` for the root itself)."""
+    path = _posix(path)
     if root:
-        root = root.rstrip("/")
+        root = _posix(root).rstrip("/")
         if path == root:
             return "."
         if path.startswith(root + "/"):
@@ -216,13 +222,23 @@ def _escape_github(value: str, is_property: bool = False) -> str:
     return value
 
 
+def _workspace_path(path: str) -> str:
+    """Path relative to the current directory (the checkout in CI), so annotations attach to files."""
+    if "://" in path or not os.path.isabs(path):
+        return _posix(path)
+    try:
+        relative = os.path.relpath(path)
+    except ValueError:  # different drive on Windows
+        return _posix(path)
+    return _posix(path) if relative.startswith("..") else relative.replace(os.sep, "/")
+
+
 def report_to_github(report: ValidationReport) -> str:
     """Format problems as GitHub Actions workflow commands (``::error file=...::message``)."""
     lines = []
-    cwd = os.getcwd()
     for r in _problems(report):
         level = "error" if r.is_error else "warning" if r.severity == "warning" else "notice"
-        path = os.path.relpath(r.path, cwd) if os.path.isabs(r.path) and r.path.startswith(cwd) else r.path
+        path = _workspace_path(r.path)
         lines.append(
             f"::{level} file={_escape_github(path, True)},title={_escape_github('katachi ' + r.validator_name, True)}"
             f"::{_escape_github(r.message)}"

@@ -243,3 +243,26 @@ def test_yolo_template_end_to_end(tmp_path):
     assert result.output.splitlines()[0] == (
         "images/val/2.jpg: error [pair_comparison] '2.jpg' (image) has no matching label (key 'val/2')"
     )
+
+
+def test_unexpected_filesystem_error_exits_two(monkeypatch):
+    from katachi.validation.snapshot import FsSnapshot
+
+    def boom(self, path):
+        raise RuntimeError("credentials expired")
+
+    monkeypatch.setattr(FsSnapshot, "info", boom)
+    result = invoke("validate", FIXTURES / "test_sanity/schema.yaml", FIXTURES / "test_sanity/dataset")
+    assert result.exit_code == 2
+    assert "Validation aborted: RuntimeError: credentials expired" in result.output
+
+
+def test_cli_choices_match_implementations():
+    from importlib import resources
+
+    from katachi.cli import OutputFormat
+    from katachi.display.report_display import OUTPUT_FORMATS
+
+    assert tuple(f.value for f in OutputFormat) == OUTPUT_FORMATS
+    shipped = sorted(p.name[:-5] for p in resources.files("katachi.templates").iterdir() if p.name.endswith(".yaml"))
+    assert sorted(TEMPLATES) == shipped

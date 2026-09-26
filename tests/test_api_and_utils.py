@@ -183,3 +183,11 @@ def test_display_helpers(tree):
     console = Console(record=True, width=120)
     console.print(create_detailed_report_tree(report))
     assert "b.png" in console.export_text()
+
+
+def test_relative_path_normalizes_windows_separators(monkeypatch):
+    from katachi.display import report_display
+
+    monkeypatch.setattr(report_display.os, "sep", "\\")
+    assert relative_path("C:\\data\\root\\a.jpg", "C:/data/root") == "a.jpg"
+    assert relative_path("C:/data/root", "C:\\data\\root\\") == "."
