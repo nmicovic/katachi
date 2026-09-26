@@ -1270,7 +1270,7 @@ requires-dist = [
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "rich", specifier = ">=14.0.0" },
-    { name = "typer", specifier = ">=0.15.3" },
+    { name = "typer", specifier = ">=0.16.0" },
 ]
 provides-extras = ["azure"]
 

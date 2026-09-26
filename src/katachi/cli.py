@@ -38,7 +38,14 @@ err_console = Console(stderr=True)
 EXIT_OK, EXIT_INVALID, EXIT_ERROR = 0, 1, 2
 
 
-class OutputFormat(str, Enum):
+class _Choice(str, Enum):
+    """String enum used for CLI choices; ``str()`` gives the value (older typer versions rely on it)."""
+
+    def __str__(self) -> str:
+        return str(self.value)
+
+
+class OutputFormat(_Choice):
     """Output formats of ``katachi validate`` (see ``display.report_display.OUTPUT_FORMATS``)."""
 
     RICH = "rich"
@@ -47,7 +54,7 @@ class OutputFormat(str, Enum):
     GITHUB = "github"
 
 
-class Template(str, Enum):
+class Template(_Choice):
     """Schema templates shipped in ``katachi/templates``."""
 
     BASIC = "basic"
