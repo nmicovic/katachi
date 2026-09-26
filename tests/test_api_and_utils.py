@@ -206,3 +206,9 @@ def test_importing_katachi_does_not_touch_application_logging():
         "assert 'app message' in sink.getvalue(), 'application handlers must survive importing katachi'\n"
     )
     subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603 - fixed code, own interpreter
+
+
+def test_version_attribute():
+    from importlib import metadata
+
+    assert katachi.__version__ == metadata.version("katachi")

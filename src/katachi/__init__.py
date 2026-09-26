@@ -13,6 +13,7 @@ Quick start::
 
 from __future__ import annotations
 
+from importlib import metadata
 from typing import Any
 
 from katachi.schema.actions import ActionRegistry, ActionTiming, register_action
@@ -23,6 +24,11 @@ from katachi.validation.predicates import register_predicate
 from katachi.validation.registry import NodeContext
 
 register_validator = ValidatorRegistry.register
+
+try:
+    __version__ = metadata.version("katachi")
+except metadata.PackageNotFoundError:  # pragma: no cover - running from a source tree without installing
+    __version__ = "0.0.0"
 
 
 def load_schema(schema: str) -> SchemaNode:
@@ -85,6 +91,7 @@ __all__ = [
     "ValidationReport",
     "ValidationResult",
     "ValidatorRegistry",
+    "__version__",
     "load_schema",
     "load_schema_file",
     "parse_schema",
