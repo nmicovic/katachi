@@ -9,8 +9,10 @@ from typing import Any
 
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from rich.tree import Tree
 
 from katachi.validation.core import ValidationReport, ValidationResult
@@ -78,10 +80,10 @@ def create_failures_table(failures: list[ValidationResult], root: str | None = N
         icon, style = ("✗", "red") if failure.severity == "error" else ("!", "yellow")
         table.add_row(
             f"[{style}]{icon}[/]",
-            relative_path(failure.path, root),
-            f"[{style}]{failure.message}[/]",
-            failure.validator_name,
-            failure.node_origin,
+            Text(relative_path(failure.path, root)),
+            Text(failure.message, style=style),
+            Text(failure.validator_name),
+            Text(failure.node_origin),
         )
     return table
 
@@ -97,7 +99,7 @@ def create_detailed_report_tree(validation_report: ValidationReport) -> Tree:
         A rich Tree object for display
     """
     root = validation_report.root_path
-    tree = Tree(f"[bold]Validation results for[/] {root}")
+    tree = Tree(f"[bold]Validation results for[/] {escape(str(root))}")
     results_by_path: dict[str, list[ValidationResult]] = {}
     for result in validation_report.results:
         results_by_path.setdefault(result.path, []).append(result)
@@ -105,17 +107,17 @@ def create_detailed_report_tree(validation_report: ValidationReport) -> Tree:
         style = (
             "red" if any(r.is_error for r in results) else "yellow" if any(r.is_warning for r in results) else "green"
         )
-        node = tree.add(f"[{style}]{relative_path(path, root)}[/]")
+        node = tree.add(Text(relative_path(path, root), style=style))
         for r in results:
             icon = "✓" if r.is_valid else "✗" if r.is_error else "!"
             color = "green" if r.is_valid else "red" if r.is_error else "yellow"
-            node.add(f"[{color}]{icon}[/] [{r.validator_name}] {r.message}")
+            node.add(f"[{color}]{icon}[/] {escape(f'[{r.validator_name}] {r.message}')}")
     actions = validation_report.action_results
     if actions:
         action_node = tree.add("[blue]Actions[/]")
         for a in actions:
             icon = "[green]✓[/]" if a.success else "[red]✗[/]"
-            action_node.add(f"{icon} {a.action_name} {relative_path(a.path, root)}: {a.message}")
+            action_node.add(f"{icon} {escape(f'{a.action_name} {relative_path(a.path, root)}: {a.message}')}")
     return tree
 
 
@@ -150,7 +152,7 @@ def display_validation_results(
         _display_detailed_report(report, out)
 
     style = "green" if report.is_valid() else "red"
-    out.print(Panel(summary_line(report, elapsed), style=style, expand=False))
+    out.print(Panel(Text(summary_line(report, elapsed)), style=style, expand=False))
 
 
 def _display_detailed_report(report: ValidationReport, out: Console) -> None:
@@ -167,7 +169,7 @@ def _display_detailed_report(report: ValidationReport, out: Console) -> None:
         table.add_column("Rule")
         table.add_column("Count", justify="right")
         for rule, count in rules.most_common():
-            table.add_row(rule, str(count))
+            table.add_row(Text(rule), str(count))
         out.print(table)
 
     if report.stats.matches:
@@ -175,7 +177,7 @@ def _display_detailed_report(report: ValidationReport, out: Console) -> None:
         table.add_column("Node")
         table.add_column("Matches", justify="right")
         for name, count in report.stats.matches.most_common():
-            table.add_row(name, str(count))
+            table.add_row(Text(name), str(count))
         out.print(table)
 
     predicate_results = [r for r in report.results if r.is_valid]
@@ -185,7 +187,9 @@ def _display_detailed_report(report: ValidationReport, out: Console) -> None:
         table.add_column("Predicate")
         table.add_column("Message")
         for r in predicate_results:
-            table.add_row(relative_path(r.path, report.root_path), r.node_origin, r.message, style="green")
+            table.add_row(
+                Text(relative_path(r.path, report.root_path)), Text(r.node_origin), Text(r.message), style="green"
+            )
         out.print(table)
 
     if report.action_results:
@@ -197,9 +201,9 @@ def _display_detailed_report(report: ValidationReport, out: Console) -> None:
         for a in report.action_results:
             table.add_row(
                 "✅" if a.success else "❌",
-                a.action_name,
-                relative_path(a.path, report.root_path),
-                a.message,
+                Text(a.action_name),
+                Text(relative_path(a.path, report.root_path)),
+                Text(a.message),
                 style="green" if a.success else "red",
             )
         out.print(table)

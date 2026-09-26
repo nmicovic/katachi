@@ -4,6 +4,7 @@ from pathlib import Path
 
 from rich.console import Console
 from rich.panel import Panel
+from rich.text import Text
 
 from katachi.schema.importer import SchemaError, load_schema_file
 from katachi.schema.schema_node import SchemaNode
@@ -45,5 +46,7 @@ def load_schema(schema_path: str, target_path: str | None = None) -> SchemaNode 
     try:
         return load_schema_or_raise(schema_path, target_path)
     except SchemaError as e:
-        console.print(Panel(f"Failed to load schema: {e!s}", title="Schema error", border_style="red", expand=False))
+        console.print(
+            Panel(Text(f"Failed to load schema: {e!s}"), title="Schema error", border_style="red", expand=False)
+        )
         return None

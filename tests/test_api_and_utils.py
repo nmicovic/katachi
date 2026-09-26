@@ -191,3 +191,18 @@ def test_relative_path_normalizes_windows_separators(monkeypatch):
     monkeypatch.setattr(report_display.os, "sep", "\\")
     assert relative_path("C:\\data\\root\\a.jpg", "C:/data/root") == "a.jpg"
     assert relative_path("C:/data/root", "C:\\data\\root\\") == "."
+
+
+def test_importing_katachi_does_not_touch_application_logging():
+    import subprocess
+
+    code = (
+        "from loguru import logger\n"
+        "import io\n"
+        "sink = io.StringIO()\n"
+        "logger.add(sink)\n"
+        "import katachi, katachi.cli\n"
+        "logger.info('app message')\n"
+        "assert 'app message' in sink.getvalue(), 'application handlers must survive importing katachi'\n"
+    )
+    subprocess.run([sys.executable, "-c", code], check=True)  # noqa: S603 - fixed code, own interpreter

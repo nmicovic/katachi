@@ -426,3 +426,113 @@ def test_report_serialization(tree):
     assert data["failure_count"] == 1
     assert data["results"][0]["validator_name"] == "file_extension"
     assert data["stats"]["matches"] == {"root": 1, "image": 1}
+
+
+# --- Regression tests from the code review -------------------------------------------------
+
+
+@pytest.mark.parametrize("pattern", [r"img\d+$", r"(?!.*\.txt).+", r"^img\d+"])
+def test_anchored_and_lookaround_patterns_match(tree, pattern):
+    """The fast path must agree with the full checks (patterns are matched against the stem)."""
+    schema = {
+        "type": "directory",
+        "children": [{"semantical_name": "img", "type": "file", "pattern_name": pattern, "extension": "jpg", "required": True}],
+    }
+    report = run_validation(schema, tree("img1.jpg"))
+    assert report.is_valid(), messages(report)
+    assert report.stats.matches["img"] == 1
+
+
+def test_extension_only_name_is_rejected_consistently(tree):
+    schema = {"type": "directory", "children": [{"semantical_name": "t", "type": "file", "extension": "txt"}]}
+    with_metadata = {
+        "type": "directory",
+        "children": [{"semantical_name": "t", "type": "file", "extension": "txt", "min_size": 0}],
+    }
+    for s in (schema, with_metadata):
+        assert rules(run_validation(s, tree(".txt"))) == ["file_extension"]
+
+
+def test_every_unmatched_entry_is_reported(tree):
+    schema = {
+        "type": "directory",
+        "children": [
+            {"semantical_name": "a", "type": "file", "extension": ".jpg"},
+            {"semantical_name": "b", "type": "file", "extension": ".png"},
+        ],
+    }
+    report = run_validation(schema, tree("x.gif"))
+    assert rules(report) == ["unexpected_entry"]
+
+
+def test_counts_rebalance_catch_all_before_specific(tree):
+    schema = """
+    type: directory
+    children:
+      - {semantical_name: any_csv, type: file, extension: .csv}
+      - {semantical_name: summary, type: file, pattern_name: summary, extension: .csv, required: true}
+    """
+    report = run_validation(schema, tree("data.csv", "summary.csv"))
+    assert report.is_valid(), messages(report)
+    registry = report.context["registry"]
+    assert [c.name for c in registry.get_contexts_by_name("summary")] == ["summary.csv"]
+    assert [c.name for c in registry.get_contexts_by_name("any_csv")] == ["data.csv"]
+
+
+def test_counts_rebalance_respects_max_count(tree):
+    schema = """
+    type: directory
+    children:
+      - {semantical_name: first, type: file, extension: .txt, max_count: 1}
+      - {semantical_name: rest, type: file, extension: .txt}
+    """
+    report = run_validation(schema, tree("a.txt", "b.txt", "c.txt"))
+    assert report.is_valid(), messages(report)
+    assert report.stats.matches == {"root": 1, "first": 1, "rest": 2}
+
+
+def test_rebalance_never_breaks_the_donor_minimum(tree):
+    schema = """
+    type: directory
+    children:
+      - {semantical_name: any_csv, type: file, extension: .csv, required: true}
+      - {semantical_name: summary, type: file, pattern_name: summary, extension: .csv, required: true}
+    """
+    # Only one csv: it can't satisfy both, so exactly one count problem is reported
+    report = run_validation(schema, tree("summary.csv"))
+    assert rules(report) == ["min_count"]
+
+
+def test_rebalance_with_directories(tree):
+    schema = """
+    type: directory
+    children:
+      - semantical_name: any_dir
+        type: directory
+        children: [{semantical_name: f, type: file}]
+      - semantical_name: special
+        type: directory
+        pattern_name: special
+        required: true
+        children: [{semantical_name: g, type: file}]
+    """
+    report = run_validation(schema, tree("x/1", "special/2"))
+    assert report.is_valid(), messages(report)
+    registry = report.context["registry"]
+    assert [c.name for c in registry.get_contexts_by_name("g")] == ["2"]
+    assert [c.name for c in registry.get_contexts_by_name("f")] == ["1"]
+
+
+def test_optional_capture_group_substitutes_empty_string(tree):
+    schema = r"""
+    type: directory
+    children:
+      - semantical_name: run
+        type: directory
+        pattern_name: '(?:(?P<p>\d+)_)?run'
+        children:
+          - {semantical_name: data, type: file, pattern_name: "{p}data"}
+    """
+    assert run_validation(schema, tree("run/data")).is_valid()
+    assert run_validation(schema, tree("7_run/7data")).is_valid()
+    assert not run_validation(schema, tree("7_run/data")).is_valid()

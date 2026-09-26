@@ -11,7 +11,9 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
+from rich.text import Text
 
 from katachi.display.report_display import (
     display_validation_results,
@@ -64,7 +66,7 @@ class Template(_Choice):
 
 
 def _fail(message: str, title: str = "Error") -> typer.Exit:
-    err_console.print(Panel(message, title=title, border_style="red", expand=False))
+    err_console.print(Panel(Text(message), title=title, border_style="red", expand=False))
     return typer.Exit(EXIT_ERROR)
 
 
@@ -157,7 +159,7 @@ def validate(
     fmt = output_format.value
     rich_output = fmt == "rich"
     if rich_output:
-        console.print(f"Validating [bold cyan]{target_path}[/] against [bold cyan]{schema_path}[/]")
+        console.print(f"Validating [bold cyan]{escape(target_path)}[/] against [bold cyan]{escape(schema_path)}[/]")
 
     start = time.perf_counter()
     try:
@@ -200,7 +202,9 @@ def describe(
         schema = load_schema_or_raise(schema_path, target_path)
     except SchemaError as e:
         raise _fail(str(e), "Schema error") from e
-    console.print(Panel(create_schema_tree(schema), title=f"Schema: {schema_path}", border_style="blue", expand=False))
+    console.print(
+        Panel(create_schema_tree(schema), title=escape(f"Schema: {schema_path}"), border_style="blue", expand=False)
+    )
 
 
 @app.command("check-schema")
@@ -214,9 +218,9 @@ def check_schema(
             load_schema_or_raise(schema_path)
         except SchemaError as e:
             failed = True
-            err_console.print(f"[red]✗[/] {schema_path}: {e}")
+            err_console.print(f"[red]✗[/] {escape(schema_path)}: {escape(str(e))}")
         else:
-            console.print(f"[green]✓[/] {schema_path}")
+            console.print(f"[green]✓[/] {escape(schema_path)}")
     if failed:
         raise typer.Exit(EXIT_INVALID)
 
@@ -242,7 +246,7 @@ def infer(
         raise _fail(str(e)) from e
     if output:
         output.write_text(text)
-        err_console.print(f"Wrote schema to [bold cyan]{output}[/]")
+        err_console.print(f"Wrote schema to [bold cyan]{escape(str(output))}[/]")
     else:
         typer.echo(text, nl=False)
 
@@ -264,7 +268,8 @@ def init(
     text = resources.files("katachi.templates").joinpath(f"{template.value}.yaml").read_text()
     output.write_text(text)
     err_console.print(
-        f"Created [bold cyan]{output}[/] from the '{template}' template. Next: katachi validate {output} <dir>"
+        f"Created [bold cyan]{escape(str(output))}[/] from the '{template}' template. "
+        f"Next: katachi validate {escape(str(output))} <dir>"
     )
 
 

@@ -5,7 +5,6 @@ from collections.abc import Iterator, Sequence
 from fnmatch import fnmatchcase
 from re import Pattern
 from re import compile as re_compile
-from re import error as re_error
 from re import escape as re_escape
 from typing import Any
 
@@ -266,37 +265,6 @@ class SchemaFile(SchemaNode):
         self.declared_extensions: tuple[str, ...] = tuple(declared)
         self.min_size: int | None = min_size
         self.max_size: int | None = max_size
-        self._fast_check: tuple[bool, Pattern | None] | None = None
-
-    def _get_fast_check(self) -> tuple[bool, Pattern | None]:
-        if self._fast_check is None:
-            if not self.has_exact_prefilter:
-                self._fast_check = (False, None)
-            elif self.pattern_validation is None and not self.extensions:
-                self._fast_check = (True, None)
-            else:
-                stem = self.pattern_validation.pattern if self.pattern_validation else ".*"
-                exts = "|".join(re_escape(e) for e in self.extensions)
-                try:
-                    self._fast_check = (True, re_compile(f"(?:{stem})(?:{exts})" if exts else f"(?:{stem})"))
-                except re_error:
-                    # e.g. patterns with global inline flags, which can't be embedded; use accepts_name()
-                    self._fast_check = (False, None)
-        return self._fast_check
-
-    @property
-    def name_regex(self) -> Pattern | None:
-        """
-        A single regex fully matching valid file names (pattern + extension), used as a fast path.
-
-        None when every name is accepted (or when :attr:`has_fast_name_check` is false).
-        """
-        return self._get_fast_check()[1]
-
-    @property
-    def has_fast_name_check(self) -> bool:
-        """Whether :attr:`name_regex` exactly decides name validity."""
-        return self._get_fast_check()[0]
 
     def accepts_name(self, name: str) -> bool:
         """Whether a file name satisfies the pattern and extension constraints."""

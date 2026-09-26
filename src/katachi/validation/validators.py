@@ -18,10 +18,10 @@ see entries from discarded alternatives.
 from __future__ import annotations
 
 import gc
+import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from fnmatch import fnmatchcase
-from re import Pattern
 from typing import Any
 
 from fsspec import AbstractFileSystem
@@ -110,25 +110,57 @@ def _needs_metadata(node: SchemaNode) -> bool:
     return isinstance(node, SchemaFile) and (node.min_size is not None or node.max_size is not None)
 
 
+_NO_CAPTURES: Scope = {}
+
+
+def _captures(match: re.Match) -> Scope:
+    """Named groups of a match; groups that didn't participate capture an empty string."""
+    return {k: v or "" for k, v in match.groupdict().items()}
+
+
 class _ChildPlan:
     """Precomputed matching strategy for one schema child."""
 
-    __slots__ = ("exact", "kind", "leaf", "node", "regex")
+    __slots__ = ("exact", "extensions", "is_file", "kind", "leaf", "node", "pattern")
 
     def __init__(self, node: SchemaNode, has_custom_validators: bool):
         self.node = node
         self.kind = _kind(node)
-        self.regex: Pattern | None
-        if isinstance(node, SchemaFile):
-            #: whether ``kind`` + ``regex`` exactly decide if the name/type part of the checks pass
-            self.exact = node.has_fast_name_check
-            self.regex = node.name_regex
-        else:
-            self.exact = node.has_exact_prefilter
-            self.regex = node.pattern_validation
+        self.is_file = isinstance(node, SchemaFile)
+        self.extensions: tuple[str, ...] = node.extensions if isinstance(node, SchemaFile) else ()
+        self.pattern = node.pattern_validation
+        #: whether :meth:`prefilter` exactly decides the type/name/extension checks (no templates or case rules)
+        self.exact = node.has_exact_prefilter
         is_leaf = not (isinstance(node, SchemaDirectory) and node.structural_children)
         #: whether a prefilter hit is a complete match (nothing else to check)
         self.leaf = self.exact and is_leaf and not _needs_metadata(node) and not has_custom_validators
+
+    def prefilter(self, entry: Entry) -> Scope | None:
+        """
+        Type + name check, with the same semantics as the full checks in ``_Matcher.local_issues``.
+
+        Returns:
+            The captured groups (possibly empty, do not mutate) when the entry passes, None otherwise
+        """
+        if entry.type != self.kind:
+            return None
+        name = entry.name
+        pattern = self.pattern
+        if self.is_file and self.extensions:
+            for ext in self.extensions:
+                if name.endswith(ext) and len(name) > len(ext):
+                    if pattern is None:
+                        return _NO_CAPTURES
+                    m = pattern.fullmatch(name[: -len(ext)])
+                    if m is not None:
+                        return _captures(m) if pattern.groupindex else _NO_CAPTURES
+            return None
+        if pattern is None:
+            return _NO_CAPTURES
+        m = pattern.fullmatch(name)
+        if m is None:
+            return None
+        return _captures(m) if pattern.groupindex else _NO_CAPTURES
 
 
 class _Matcher:
@@ -180,7 +212,7 @@ class _Matcher:
                     )
                 ], None
             if pattern.groupindex:
-                captures = {k: v for k, v in m.groupdict().items() if v is not None}
+                captures = _captures(m)
         if node.name_case_regex is not None and node.name_case_regex.fullmatch(name) is None:
             return [_issue(node, entry.path, "name_case", f"{label} '{name}' is not {node.name_case}")], None
         return [], captures
@@ -321,9 +353,10 @@ class _Matcher:
         counts = [0] * len(plan)
         check_ignore = bool(node.ignore or self.ignore)
         bindings = result.bindings
+        #: (plan index, entry, first binding offset) of every entry matched by a node; used for rebalancing
+        assigned: list[tuple[int, Entry, int]] = []
         for child_entry in child_entries:
-            name = child_entry.name
-            if check_ignore and self._is_ignored(node, name):
+            if check_ignore and self._is_ignored(node, child_entry.name):
                 continue
             self.entries_checked += 1
             attempts: list[tuple[int, _Match]] = []
@@ -332,25 +365,23 @@ class _Matcher:
                     # Exact prefilter on type + name: skip nodes that can't possibly match
                     if child_entry.type != step.kind:
                         continue
-                    if step.regex is not None:
-                        m = step.regex.fullmatch(name)
-                        if m is None:
-                            continue
-                        if step.leaf:
-                            captures = m.groupdict() if step.regex.groupindex else None
-                            child_scope = (
-                                {**scope, **{k: v for k, v in captures.items() if v is not None}} if captures else scope
-                            )
-                            bindings.append((step.node, child_entry.path, parents, child_scope))
-                            counts[index] += 1
-                            break
-                    elif step.leaf:
-                        bindings.append((step.node, child_entry.path, parents, scope))
+                    captures = step.prefilter(child_entry)
+                    if captures is None:
+                        continue
+                    if step.leaf:
+                        assigned.append((index, child_entry, len(bindings)))
+                        bindings.append((
+                            step.node,
+                            child_entry.path,
+                            parents,
+                            {**scope, **captures} if captures else scope,
+                        ))
                         counts[index] += 1
                         break
                 match = self.match(step.node, child_entry, parents, scope)
                 if match.ok:
                     counts[index] += 1
+                    assigned.append((index, child_entry, len(bindings)))
                     bindings.extend(match.bindings)
                     result.issues.extend(match.issues)
                     break
@@ -366,8 +397,82 @@ class _Matcher:
                 elif not node.allow_extra:
                     result.issues.extend(self._explain_unmatched(child_entry, node, scope))
 
+        if any(self._count_violated(step.node, count) for step, count in zip(plan, counts, strict=True)):
+            self._rebalance(plan, counts, assigned, parents, scope, result)
+
         for index, step in enumerate(plan):
             result.issues.extend(self._count_issues(entry, step.node, counts[index]))
+
+    @staticmethod
+    def _count_violated(node: SchemaNode, count: int) -> bool:
+        return count < node.effective_min_count or (node.max_count is not None and count > node.max_count)
+
+    def _rebalance(
+        self,
+        plan: list[_ChildPlan],
+        counts: list[int],
+        assigned: list[tuple[int, Entry, int]],
+        parents: Parents,
+        scope: Scope,
+        result: _Match,
+    ) -> None:
+        """
+        Move entries between sibling nodes they both match, to satisfy ``min_count`` / ``max_count``.
+
+        First-fit assigns ``summary.csv`` to a catch-all ``*.csv`` node listed before a required
+        ``summary`` node; this gives it to ``summary`` instead, as long as the donor keeps its minimum.
+        """
+        moved: dict[int, tuple[int, list[_Binding]]] = {}  # position in `assigned` -> (new index, bindings)
+
+        def current(pos: int) -> int:
+            return moved[pos][0] if pos in moved else assigned[pos][0]
+
+        def try_move(pos: int, target: int) -> bool:
+            entry = assigned[pos][1]
+            match = self.match(plan[target].node, entry, parents, scope)
+            if not match.ok or match.issues:
+                return False
+            counts[current(pos)] -= 1
+            counts[target] += 1
+            moved[pos] = (target, match.bindings)
+            return True
+
+        def has_room(index: int) -> bool:
+            maximum = plan[index].node.max_count
+            return maximum is None or counts[index] < maximum
+
+        for target, step in enumerate(plan):
+            for pos in range(len(assigned)):
+                if counts[target] >= step.node.effective_min_count:
+                    break
+                donor = current(pos)
+                if donor != target and counts[donor] > plan[donor].node.effective_min_count:
+                    try_move(pos, target)
+        for source, step in enumerate(plan):
+            maximum = step.node.max_count
+            for pos in range(len(assigned)):
+                if maximum is None or counts[source] <= maximum:
+                    break
+                if current(pos) != source:
+                    continue
+                for target in range(len(plan)):
+                    if target != source and has_room(target) and try_move(pos, target):
+                        break
+
+        if moved:
+            result.bindings = self._rebuild_bindings(result.bindings, assigned, moved)
+
+    @staticmethod
+    def _rebuild_bindings(
+        old: list[_Binding], assigned: list[tuple[int, Entry, int]], moved: dict[int, tuple[int, list[_Binding]]]
+    ) -> list[_Binding]:
+        """Replace the bindings of moved entries, keeping everything else in order."""
+        offsets = [start for _, _, start in assigned]
+        rebuilt = old[: offsets[0]] if offsets else list(old)
+        for pos, start in enumerate(offsets):
+            end = offsets[pos + 1] if pos + 1 < len(offsets) else len(old)
+            rebuilt.extend(moved[pos][1] if pos in moved else old[start:end])
+        return rebuilt
 
     def _explain_unmatched(self, entry: Entry, parent: SchemaDirectory, scope: Scope) -> list[ValidationResult]:
         """Explain why an entry matched none of the children of its directory."""
@@ -376,9 +481,9 @@ class _Matcher:
         hint = self._case_hint(entry, children, scope)
         suffix = f" ({hint})" if hint else ""
         # Only one possible node: its specific errors are the most helpful
-        if len(children) == 1:
+        if len(children) == 1 and local[0]:
             issues = local[0]
-            if suffix and issues:
+            if suffix:
                 issues[0].message += suffix
             return issues
         expected = ", ".join(f"{c.semantical_name} ({c.describe_constraints()})" for c in children)

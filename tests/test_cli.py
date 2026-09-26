@@ -266,3 +266,19 @@ def test_cli_choices_match_implementations():
     assert tuple(f.value for f in OutputFormat) == OUTPUT_FORMATS
     shipped = sorted(p.name[:-5] for p in resources.files("katachi.templates").iterdir() if p.name.endswith(".yaml"))
     assert sorted(TEMPLATES) == shipped
+
+
+def test_names_and_patterns_are_not_interpreted_as_markup(tmp_path):
+    schema = tmp_path / "schema.yaml"
+    schema.write_text('type: directory\nchildren:\n  - {semantical_name: img, type: file, pattern_name: "img[/_]?\\\\d+", extension: .jpg}\n')
+    data = tmp_path / "[data]"
+    data.mkdir()
+    (data / "[draft] notes.md").touch()
+    (data / "img_1.jpg").touch()
+    result = runner.invoke(app, ["validate", str(schema), str(data), "--report-length", "0"], terminal_width=200)
+    assert result.exit_code == 1, result.output
+    assert "[draft] notes.md" in result.output
+    assert "[data]" in result.output
+    described = invoke("describe", schema)
+    assert described.exit_code == 0
+    assert "img[/_]?\\d+.jpg" in described.output

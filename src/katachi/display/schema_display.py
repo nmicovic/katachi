@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from rich.markup import escape
 from rich.tree import Tree
 
 from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode, SchemaPredicateNode
@@ -15,12 +16,11 @@ def _cardinality(node: SchemaNode) -> str:
 
 def _label(node: SchemaNode) -> str:
     if isinstance(node, SchemaPredicateNode):
-        label = (
-            f"🔗 [bold magenta]{node.semantical_name}[/] [magenta]{node.predicate_type}({', '.join(node.elements)})[/]"
-        )
+        call = f"{node.predicate_type}({', '.join(node.elements)})"
+        label = f"🔗 [bold magenta]{escape(node.semantical_name)}[/] [magenta]{escape(call)}[/]"
     else:
         icon, style = ("📁", "green") if isinstance(node, SchemaDirectory) else ("📄", "yellow")
-        label = f"{icon} [bold {style}]{node.semantical_name}[/] [cyan]{node.describe_constraints()}[/]"
+        label = f"{icon} [bold {style}]{escape(node.semantical_name)}[/] [cyan]{escape(node.describe_constraints())}[/]"
         extras = [_cardinality(node)]
         if node.name_case:
             extras.append(node.name_case)
@@ -39,11 +39,11 @@ def _label(node: SchemaNode) -> str:
                 extras.append("any content")
         extras = [e for e in extras if e]
         if extras:
-            label += f" [dim]{' · '.join(extras)}[/]"
+            label += f" [dim]{escape(' · '.join(extras))}[/]"
     if node.severity != "error":
         label += f" [yellow]({node.severity})[/]"
     if node.description:
-        label += f"\n[italic dim]{node.description}[/]"
+        label += f"\n[italic dim]{escape(node.description)}[/]"
     return label
 
 
