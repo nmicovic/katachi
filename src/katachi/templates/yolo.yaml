@@ -1,0 +1,46 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nmicovic/katachi/main/katachi.schema.json
+# Ultralytics YOLO detection dataset:
+#   data.yaml, images/{train,val,test}/*.jpg and labels/{train,val,test}/*.txt
+semantical_name: yolo_dataset
+type: directory
+ignore: [".*", "*.cache"]
+children:
+  - semantical_name: data_config
+    type: file
+    pattern_name: data
+    extension: [.yaml, .yml]
+    required: true
+  - semantical_name: images
+    type: directory
+    pattern_name: images
+    required: true
+    children:
+      - semantical_name: image_split
+        type: directory
+        pattern_name: "(?P<split>train|val|test)"
+        min_count: 1
+        children:
+          - semantical_name: image
+            type: file
+            extension: [.jpg, .jpeg, .png, .bmp, .webp]
+            min_count: 1
+  - semantical_name: labels
+    type: directory
+    pattern_name: labels
+    required: true
+    children:
+      - semantical_name: label_split
+        type: directory
+        pattern_name: "(?P<split>train|val|test)"
+        min_count: 1
+        children:
+          - semantical_name: label
+            type: file
+            extension: .txt
+  - semantical_name: every_image_is_labeled
+    type: predicate
+    predicate_type: pair_comparison
+    description: images/<split>/x.jpg must have labels/<split>/x.txt and vice versa
+    elements: [image, label]
+    options:
+      key: "{split}/{stem}"

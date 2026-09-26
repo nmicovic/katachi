@@ -1,0 +1,14 @@
+- id: katachi
+  name: katachi validate
+  description: Validate a directory structure against a Katachi schema (pass the schema and directory as args)
+  entry: katachi validate --format text
+  language: python
+  pass_filenames: false
+  always_run: true
+  require_serial: true
+- id: katachi-check-schema
+  name: katachi check schema
+  description: Check Katachi schema files for errors
+  entry: katachi check-schema
+  language: python
+  files: (^|/)(katachi|[^/]+\.katachi)\.ya?ml$

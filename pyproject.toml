@@ -1,57 +1,71 @@
 [project]
 name = "katachi"
-version = "0.0.2"
-description = "Python package for validating, processing and parsing directories."
+version = "0.1.0"
+description = "Validate, process and document directory structures (local, S3, Azure, ...) against YAML schemas."
 authors = [{ name = "Nemanja Micovic", email = "contact.nmicovic@protonmail.com" }]
 readme = "README.md"
-keywords = ['python']
-requires-python = ">=3.9,<4.0"
+license = "MIT"
+license-files = ["LICENSE"]
+keywords = ['directory', 'filesystem', 'schema', 'validation', 'dataset', 'linter', 'fsspec', 'structure']
+requires-python = ">=3.10,<4.0"
 classifiers = [
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: System :: Filesystems",
+    "Typing :: Typed",
 ]
 dependencies = [
-    "adlfs>=2024.12.0",
     "fsspec>=2025.5.1",
     "loguru>=0.7.3",
     "pyyaml>=6.0.2",
     "rich>=14.0.0",
-    "typer>=0.15.3",
+    "typer>=0.16.0",
 ]
+
+[project.optional-dependencies]
+azure = ["adlfs>=2024.12.0"]
 
 [project.urls]
 Homepage = "https://nmicovic.github.io/katachi/"
 Repository = "https://github.com/nmicovic/katachi"
 Documentation = "https://nmicovic.github.io/katachi/"
+Changelog = "https://github.com/nmicovic/katachi/blob/main/CHANGELOG.md"
+Issues = "https://github.com/nmicovic/katachi/issues"
 
 [project.scripts]
 katachi = "katachi.cli:app"
 
 [dependency-groups]
 dev = [
-    "pytest>=7.2.0",
-    "pre-commit>=2.20.0",
-    "tox-uv>=1.11.3",
+    "pytest>=8.3",
+    "pytest-cov>=6.0",
+    "hypothesis>=6.100",
+    "jsonschema>=4.23",
+    "pre-commit>=4.0",
     "deptry>=0.23.0",
-    "mypy>=0.991",
-    "pytest-cov>=4.0.0",
-    "ruff>=0.11.5",
-    "mkdocs>=1.4.2",
-    "mkdocs-material>=8.5.10",
-    "mkdocstrings[python]>=0.26.1",
+    "mypy>=1.15",
+    "ruff>=0.16",
+    "mkdocs>=1.6",
+    "mkdocs-material>=9.5",
+    "mkdocstrings[python]>=0.29",
     "types-pyyaml>=6.0.12.20250402",
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.sdist]
+include = ["src/katachi", "tests", "README.md", "CHANGELOG.md", "LICENSE", "katachi.schema.json"]
 
 
 
@@ -78,30 +92,27 @@ follow_imports = "skip"
 disable_error_code = ["import-untyped", "no-any-unimported", "union-attr"]
 
 [[tool.mypy.overrides]]
-# Adding this due to ffspec not having type stubs.
-module = "katachi/schema/schema_node"
+# fsspec has no type stubs, so arguments typed as AbstractFileSystem become Any
+module = [
+    "katachi.schema.importer",
+    "katachi.schema.infer",
+    "katachi.utils.fs_utils",
+    "katachi.validation.snapshot",
+    "katachi.validation.validators",
+    "katachi",
+]
 disable_error_code = ["no-any-unimported"]
-
-[[tool.mypy.overrides]]
-# Adding this due to fsspec and adlfs not having type stubs.
-module = "katachi/schema/importer"
-disable_error_code = ["no-any-unimported", "arg-type"]
-
-[[tool.mypy.overrides]]
-# Adding this due to fsspec and adlfs not having type stubs.
-module = "katachi/utils/fs_utils"
-disable_error_code = ["no-any-unimported", "arg-type"]
-
-[[tool.mypy.overrides]]
-# Adding this due to fsspec and adlfs not having type stubs.
-module = "katachi/validation/validators"
-disable_error_code = ["no-any-unimported", "arg-type"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    # Older supported typer versions use click APIs deprecated in click 8.2+
+    "ignore:'click.*' is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
-target-version = "py39"
+target-version = "py310"
 line-length = 120
 fix = true
 
@@ -143,20 +154,29 @@ ignore = [
     "E501",
     # DoNotAssignLambda
     "E731",
+    # Long exception messages are how Katachi explains schema errors
+    "TRY003",
 ]
 
+[tool.ruff.lint.mccabe]
+# The matching hot loop is intentionally inlined for performance
+max-complexity = 16
+
 [tool.ruff.lint.per-file-ignores]
-"tests/*" = ["S101"]
+"tests/*" = ["S101", "S108"]
+"benchmarks/*" = ["S101", "S108", "C901"]
 
 [tool.ruff.format]
 preview = true
 
 [tool.coverage.report]
 skip_empty = true
+fail_under = 88
+exclude_also = ["if TYPE_CHECKING:", "if __name__ == .__main__.:"]
 
 [tool.coverage.run]
 branch = true
 source = ["src"]
 
 [tool.deptry.per_rule_ignores]
-DEP002 = ["fsspec", "adlfs"]
+DEP002 = ["adlfs"]

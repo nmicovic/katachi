@@ -1,0 +1,23 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nmicovic/katachi/main/katachi.schema.json
+# A starter schema: edit the patterns to describe your directory.
+semantical_name: project
+type: directory
+description: Root of the directory to validate
+ignore: [".*"]            # skip hidden files such as .DS_Store or .git
+children:
+  - semantical_name: readme
+    type: file
+    pattern_name: README
+    extension: .md
+    required: true
+  - semantical_name: data
+    type: directory
+    pattern_name: data
+    required: true
+    children:
+      - semantical_name: record
+        type: file
+        pattern_name: "record_\\d+"
+        extension: [.csv, .parquet]
+        min_count: 1
+        max_size: 104857600   # 100 MB

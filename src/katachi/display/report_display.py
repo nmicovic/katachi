@@ -1,42 +1,96 @@
-from pathlib import Path
-from typing import Optional
+"""Display utilities for validation reports (rich terminal output, JSON, GitHub annotations, plain text)."""
+
+from __future__ import annotations
+
+import json
+import os
+from collections import Counter
+from typing import Any
 
 from rich import box
 from rich.console import Console
+from rich.markup import escape
 from rich.panel import Panel
 from rich.table import Table
+from rich.text import Text
 from rich.tree import Tree
 
 from katachi.validation.core import ValidationReport, ValidationResult
 
 console = Console()
 
+OUTPUT_FORMATS = ("rich", "text", "json", "github")
 
-def create_failures_table(failures: list[ValidationResult]) -> Table:
+
+def _posix(path: str) -> str:
+    # fsspec reports local Windows paths as "C:/dir/file"; normalize native "C:\\dir\\file" the same way
+    return path.replace("\\", "/") if os.sep == "\\" else path
+
+
+def relative_path(path: str, root: str | None) -> str:
+    """Show a path relative to the validated root (``.`` for the root itself)."""
+    path = _posix(path)
+    if root:
+        root = _posix(root).rstrip("/")
+        if path == root:
+            return "."
+        if path.startswith(root + "/"):
+            return path[len(root) + 1 :]
+    return path
+
+
+def _problems(report: ValidationReport, include_warnings: bool = True) -> list[ValidationResult]:
+    return [r for r in report.results if r.is_error or (include_warnings and r.is_warning)]
+
+
+def summary_line(report: ValidationReport, elapsed: float | None = None) -> str:
+    """One line summary, e.g. ``✗ 3 errors, 1 warning · 20001 entries checked in 0.08s``."""
+    errors, warnings = len(report.failures), len(report.warnings)
+    parts = []
+    if errors:
+        parts.append(f"{errors} error{'s' if errors != 1 else ''}")
+    if warnings:
+        parts.append(f"{warnings} warning{'s' if warnings != 1 else ''}")
+    status = "✓ Valid" if report.is_valid() else "✗ Invalid"
+    detail = f": {', '.join(parts)}" if parts else ""
+    timing = f" in {elapsed:.2f}s" if elapsed is not None else ""
+    skipped = " · relationship checks skipped until structural errors are fixed" if report.predicates_skipped else ""
+    return f"{status}{detail} · {report.stats.entries_checked} entries checked{timing}{skipped}"
+
+
+def create_failures_table(failures: list[ValidationResult], root: str | None = None) -> Table:
     """
     Create a rich table showing validation failures.
 
     Args:
         failures: List of ValidationResult objects representing failures
+        root: Root path used to shorten displayed paths
 
     Returns:
         A Rich Table object
     """
     table = Table(show_header=True, header_style="bold magenta", box=box.ROUNDED)
-    table.add_column("Path", style="cyan", no_wrap=True)
-    table.add_column("Error", style="red")
-    table.add_column("Validator", style="blue")
-    table.add_column("Node Origin", style="blue")
+    table.add_column("", no_wrap=True)
+    table.add_column("Path", style="cyan", overflow="fold")
+    table.add_column("Problem", overflow="fold")
+    table.add_column("Rule", style="blue", no_wrap=True)
+    table.add_column("Node", style="dim", no_wrap=True)
 
     for failure in failures:
-        table.add_row(str(failure.path), failure.message, failure.validator_name, failure.node_origin)
-
+        icon, style = ("✗", "red") if failure.severity == "error" else ("!", "yellow")
+        table.add_row(
+            f"[{style}]{icon}[/]",
+            Text(relative_path(failure.path, root)),
+            Text(failure.message, style=style),
+            Text(failure.validator_name),
+            Text(failure.node_origin),
+        )
     return table
 
 
 def create_detailed_report_tree(validation_report: ValidationReport) -> Tree:
     """
-    Create a detailed tree report of validation results.
+    Create a detailed tree report of validation results, grouped by path.
 
     Args:
         validation_report: The report to display
@@ -44,199 +98,164 @@ def create_detailed_report_tree(validation_report: ValidationReport) -> Tree:
     Returns:
         A rich Tree object for display
     """
-    tree = Tree("Validation Results")
-    _add_validation_results_to_tree(tree, validation_report)
-    _add_action_results_to_tree(tree, validation_report)
+    root = validation_report.root_path
+    tree = Tree(f"[bold]Validation results for[/] {escape(str(root))}")
+    results_by_path: dict[str, list[ValidationResult]] = {}
+    for result in validation_report.results:
+        results_by_path.setdefault(result.path, []).append(result)
+    for path, results in sorted(results_by_path.items()):
+        style = (
+            "red" if any(r.is_error for r in results) else "yellow" if any(r.is_warning for r in results) else "green"
+        )
+        node = tree.add(Text(relative_path(path, root), style=style))
+        for r in results:
+            icon = "✓" if r.is_valid else "✗" if r.is_error else "!"
+            color = "green" if r.is_valid else "red" if r.is_error else "yellow"
+            node.add(f"[{color}]{icon}[/] {escape(f'[{r.validator_name}] {r.message}')}")
+    actions = validation_report.action_results
+    if actions:
+        action_node = tree.add("[blue]Actions[/]")
+        for a in actions:
+            icon = "[green]✓[/]" if a.success else "[red]✗[/]"
+            action_node.add(f"{icon} {escape(f'{a.action_name} {relative_path(a.path, root)}: {a.message}')}")
     return tree
 
 
-def _add_validation_results_to_tree(tree: Tree, validation_report: ValidationReport) -> None:
-    """
-    Add validation results to the tree.
-
-    Args:
-        tree: The tree to populate
-        validation_report: The report containing validation results
-    """
-    results_by_path = _group_results_by_path(validation_report.results)
-
-    for path_str, results in sorted(results_by_path.items()):
-        path = Path(path_str)
-        style = "red" if any(not r.is_valid for r in results) else "green"
-        path_name = path.name if path.name else path.absolute()
-        path_node = tree.add(f"[{style}]{path_name}[/] [{style}]({path})[/]")
-
-        _add_passed_validations(path_node, results)
-        _add_failed_validations(path_node, results)
-
-
-def _add_action_results_to_tree(tree: Tree, validation_report: ValidationReport) -> None:
-    """
-    Add action results to the tree if available.
-
-    Args:
-        tree: The tree to populate
-        validation_report: The report containing action results
-    """
-    if hasattr(validation_report, "context") and "action_results" in validation_report.context:
-        action_results = validation_report.context["action_results"]
-        if action_results:
-            action_node = tree.add("[blue]Actions[/]")
-            actions_by_path = _group_results_by_path(action_results)
-
-            for path_str, results in sorted(actions_by_path.items()):
-                path = Path(path_str)
-                path_name = path.name if path.name else path.absolute()
-                action_path_node = action_node.add(f"[blue]{path_name}[/] ([blue]{path}[/])")
-
-                for result in results:
-                    style = "green" if result.is_valid else "red"
-                    action_path_node.add(f"[{style}]✓[/] {result.message}")
-
-
-def _group_results_by_path(results: list[ValidationResult]) -> dict[str, list[ValidationResult]]:
-    """
-    Group results by their path.
-
-    Args:
-        results: List of results to group
-
-    Returns:
-        A dictionary with paths as keys and lists of results as values
-    """
-    results_by_path: dict[str, list[ValidationResult]] = {}
-    for result in results:
-        path_str = str(result.path)
-        if path_str not in results_by_path:
-            results_by_path[path_str] = []
-        results_by_path[path_str].append(result)
-    return results_by_path
-
-
-def _add_passed_validations(path_node: Tree, results: list[ValidationResult]) -> None:
-    """
-    Add passed validations to the tree node.
-
-    Args:
-        path_node: The tree node to populate
-        results: List of validation results
-    """
-    passed = [r for r in results if r.is_valid]
-    if passed:
-        passed_node = path_node.add("[green]Passed Validations[/]")
-        for p in passed:
-            msg = p.message if p.message else f"Passed {p.validator_name} check"
-            passed_node.add(f"[green]✓[/] {msg}")
-
-
-def _add_failed_validations(path_node: Tree, results: list[ValidationResult]) -> None:
-    """
-    Add failed validations to the tree node.
-
-    Args:
-        path_node: The tree node to populate
-        results: List of validation results
-    """
-    failed = [r for r in results if not r.is_valid]
-    if failed:
-        failed_node = path_node.add("[red]Failed Validations[/]")
-        for f in failed:
-            failed_node.add(f"[red]✗[/] [{f.validator_name}] {f.message}")
-
-
 def display_validation_results(
-    report: ValidationReport, detail_report: bool = False, report_length: Optional[int] = None
+    report: ValidationReport,
+    detail_report: bool = False,
+    report_length: int | None = None,
+    elapsed: float | None = None,
+    out: Console | None = None,
 ) -> None:
     """
     Display validation results in a formatted way.
 
     Args:
         report: The validation report to display
-        detail_report: Whether to show a detailed report
+        detail_report: Whether to show a detailed report (per rule statistics, matches, actions)
+        report_length: Show at most this many problems (all when None or 0)
+        elapsed: Validation time in seconds, shown in the summary
+        out: Console to print to
     """
-    if report.is_valid():
-        console.print(Panel("✅ All validations passed successfully!", style="green"))
-        return
+    out = out or console
+    problems = _problems(report)
+    if problems:
+        shown = problems[:report_length] if report_length else problems
+        out.print(create_failures_table(shown, report.root_path))
+        if len(shown) < len(problems):
+            out.print(
+                f"[dim]… {len(problems) - len(shown)} more problem(s) not shown (use --report-length 0 to show all)[/]"
+            )
 
-    # Create a table for the results
-    table = Table(show_header=True, header_style="bold magenta")
-    table.add_column("Status", style="dim")
-    table.add_column("Path")
-    table.add_column("Message")
-
-    clipped_results = False
-    displayed_count = 0
-
-    # Add all results to the table
-    for i, result in enumerate(report.results):
-        status = "✅" if result.is_valid else "❌"
-        style = "green" if result.is_valid else "red"
-        table.add_row(status, result.path, result.message, style=style)
-        displayed_count += 1
-        if report_length and i >= report_length - 1:
-            clipped_results = True
-            break
-
-    # Display the table
-    console.print(table)
-
-    if not report_length and clipped_results:
-        skipped_count = len(report.results) - displayed_count
-        console.print(
-            f"Showing first {displayed_count} results, skipped {skipped_count} more results. Use --report-length to limit output."
-        )
-        print("WTF")
-
-    # If detailed report is requested, show additional information
     if detail_report:
-        _display_detailed_report(report)
+        _display_detailed_report(report, out)
+
+    style = "green" if report.is_valid() else "red"
+    out.print(Panel(Text(summary_line(report, elapsed)), style=style, expand=False))
 
 
-def _display_detailed_report(report: ValidationReport) -> None:
+def _display_detailed_report(report: ValidationReport, out: Console) -> None:
     """
     Display a detailed validation report.
 
     Args:
         report: The validation report to display
+        out: Console to print to
     """
-    # Group results by validator
-    validator_results: dict[str, list[ValidationResult]] = {}
-    for result in report.results:
-        if result.validator_name not in validator_results:
-            validator_results[result.validator_name] = []
-        validator_results[result.validator_name].append(result)
+    rules = Counter(r.validator_name for r in _problems(report))
+    if rules:
+        table = Table(title="Problems by rule", box=box.SIMPLE, header_style="bold")
+        table.add_column("Rule")
+        table.add_column("Count", justify="right")
+        for rule, count in rules.most_common():
+            table.add_row(Text(rule), str(count))
+        out.print(table)
 
-    # Display results by validator
-    for validator_name, results in validator_results.items():
-        console.print(Panel(f"Validator: {validator_name}", style="bold blue"))
+    if report.stats.matches:
+        table = Table(title="Matched entries per schema node", box=box.SIMPLE, header_style="bold")
+        table.add_column("Node")
+        table.add_column("Matches", justify="right")
+        for name, count in report.stats.matches.most_common():
+            table.add_row(Text(name), str(count))
+        out.print(table)
 
-        # Create a table for this validator's results
-        table = Table(show_header=True, header_style="bold")
-        table.add_column("Status", style="dim")
+    predicate_results = [r for r in report.results if r.is_valid]
+    if predicate_results:
+        table = Table(title="Passed predicates", box=box.SIMPLE, header_style="bold")
+        table.add_column("Path")
+        table.add_column("Predicate")
+        table.add_column("Message")
+        for r in predicate_results:
+            table.add_row(
+                Text(relative_path(r.path, report.root_path)), Text(r.node_origin), Text(r.message), style="green"
+            )
+        out.print(table)
+
+    if report.action_results:
+        table = Table(title="Actions", box=box.SIMPLE, header_style="bold")
+        table.add_column("")
+        table.add_column("Action")
         table.add_column("Path")
         table.add_column("Message")
-        table.add_column("Node")
+        for a in report.action_results:
+            table.add_row(
+                "✅" if a.success else "❌",
+                Text(a.action_name),
+                Text(relative_path(a.path, report.root_path)),
+                Text(a.message),
+                style="green" if a.success else "red",
+            )
+        out.print(table)
 
-        # Add results to the table
-        for result in results:
-            status = "✅" if result.is_valid else "❌"
-            style = "green" if result.is_valid else "red"
-            table.add_row(status, result.path, result.message, result.node_origin, style=style)
 
-        console.print(table)
+def report_to_json(report: ValidationReport, elapsed: float | None = None) -> str:
+    """Serialize a report to JSON (paths are kept absolute, plus a ``relative_path`` field)."""
+    data: dict[str, Any] = report.to_dict()
+    for result in data["results"]:
+        result["relative_path"] = relative_path(result["path"], report.root_path)
+    if elapsed is not None:
+        data["elapsed_seconds"] = round(elapsed, 4)
+    return json.dumps(data, indent=2, default=str)
 
-    # Display any action results if present
-    if "action_results" in report.context:
-        console.print(Panel("Action Results", style="bold yellow"))
-        action_table = Table(show_header=True, header_style="bold")
-        action_table.add_column("Status", style="dim")
-        action_table.add_column("Validator")
-        action_table.add_column("Path")
-        action_table.add_column("Message")
 
-        for result in report.context["action_results"]:
-            status = "✅" if result.is_valid else "❌"
-            style = "green" if result.is_valid else "red"
-            action_table.add_row(status, result.validator_name, result.path, result.message, style=style)
+def _escape_github(value: str, is_property: bool = False) -> str:
+    value = value.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    if is_property:
+        value = value.replace(":", "%3A").replace(",", "%2C")
+    return value
 
-        console.print(action_table)
+
+def _workspace_path(path: str) -> str:
+    """Path relative to the current directory (the checkout in CI), so annotations attach to files."""
+    if "://" in path or not os.path.isabs(path):
+        return _posix(path)
+    try:
+        relative = os.path.relpath(path)
+    except ValueError:  # different drive on Windows
+        return _posix(path)
+    return _posix(path) if relative.startswith("..") else relative.replace(os.sep, "/")
+
+
+def report_to_github(report: ValidationReport) -> str:
+    """Format problems as GitHub Actions workflow commands (``::error file=...::message``)."""
+    lines = []
+    for r in _problems(report):
+        level = "error" if r.is_error else "warning" if r.severity == "warning" else "notice"
+        path = _workspace_path(r.path)
+        lines.append(
+            f"::{level} file={_escape_github(path, True)},title={_escape_github('katachi ' + r.validator_name, True)}"
+            f"::{_escape_github(r.message)}"
+        )
+    lines.append(summary_line(report))
+    return "\n".join(lines)
+
+
+def report_to_text(report: ValidationReport, elapsed: float | None = None) -> str:
+    """Plain, grep-friendly output: ``path: severity [rule] message`` per problem, then a summary."""
+    lines = [
+        f"{relative_path(r.path, report.root_path)}: {r.severity} [{r.validator_name}] {r.message}"
+        for r in _problems(report)
+    ]
+    lines.append(summary_line(report, elapsed))
+    return "\n".join(lines)

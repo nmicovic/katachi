@@ -2,11 +2,13 @@
 Registry module for tracking validated nodes.
 
 This module provides functionality for registering and querying nodes
-that have passed validation, to support cross-level predicate evaluation.
+that have passed validation, to support cross-level predicate evaluation
+and actions.
 """
 
-from collections.abc import Iterator
-from typing import Optional
+from __future__ import annotations
+
+from collections.abc import Iterator, Sequence
 
 from katachi.schema.schema_node import SchemaNode
 
@@ -14,7 +16,16 @@ from katachi.schema.schema_node import SchemaNode
 class NodeContext:
     """Context information about a validated node."""
 
-    def __init__(self, node: SchemaNode, path: str, parent_paths: Optional[list[str]] = None):
+    __slots__ = ("_parent_paths", "captures", "node", "parents", "path")
+
+    def __init__(
+        self,
+        node: SchemaNode,
+        path: str,
+        parent_paths: list[str] | None = None,
+        parents: Sequence[tuple[SchemaNode, str]] | None = None,
+        captures: dict[str, str] | None = None,
+    ):
         """
         Initialize a node context.
 
@@ -22,10 +33,26 @@ class NodeContext:
             node: The schema node
             path: The path that was validated
             parent_paths: List of parent paths in the hierarchy
+            parents: List of parent ``(schema_node, path)`` tuples, outermost first
+            captures: Values of named groups captured by this entry's and its ancestors' patterns
         """
         self.node = node
         self.path = path
-        self.parent_paths = parent_paths or []
+        self.parents: Sequence[tuple[SchemaNode, str]] = parents or ()
+        self._parent_paths = parent_paths
+        self.captures: dict[str, str] = captures if captures is not None else {}
+
+    @property
+    def parent_paths(self) -> list[str]:
+        """Paths of the parent directories, outermost first."""
+        if self._parent_paths is None:
+            self._parent_paths = [p for _, p in self.parents]
+        return self._parent_paths
+
+    @property
+    def name(self) -> str:
+        """Base name of the validated path."""
+        return self.path.rsplit("/", 1)[-1]
 
     def __repr__(self) -> str:
         return f"NodeContext({self.node.semantical_name}, {self.path})"
@@ -38,12 +65,20 @@ class NodeRegistry:
         """Initialize the node registry."""
         # Dictionary mapping semantical names to lists of node contexts
         self._nodes_by_name: dict[str, list[NodeContext]] = {}
+        # Dictionary mapping schema node identity to lists of node contexts
+        self._nodes_by_node: dict[int, list[NodeContext]] = {}
         # Dictionary mapping paths to node contexts
         self._nodes_by_path: dict[str, NodeContext] = {}
         # Set of directories that have been processed
         self._processed_dirs: set[str] = set()
 
-    def register_node(self, node: SchemaNode, path: str, parent_paths: Optional[list[str]] = None) -> None:
+    def register_node(
+        self,
+        node: SchemaNode,
+        path: str,
+        parent_paths: list[str] | None = None,
+        parents: Sequence[tuple[SchemaNode, str]] | None = None,
+    ) -> NodeContext:
         """
         Register a node that passed validation.
 
@@ -51,16 +86,20 @@ class NodeRegistry:
             node: Schema node that was validated
             path: Path that was validated
             parent_paths: List of parent paths in the hierarchy
+            parents: List of parent ``(schema_node, path)`` tuples
+
+        Returns:
+            The created context
         """
-        context = NodeContext(node, path, parent_paths)
+        context = NodeContext(node, path, parent_paths, parents)
+        self.add_context(context)
+        return context
 
-        # Register by semantical name
-        if node.semantical_name not in self._nodes_by_name:
-            self._nodes_by_name[node.semantical_name] = []
-        self._nodes_by_name[node.semantical_name].append(context)
-
-        # Register by path
-        self._nodes_by_path[path] = context
+    def add_context(self, context: NodeContext) -> None:
+        """Register an already created context."""
+        self._nodes_by_name.setdefault(context.node.semantical_name, []).append(context)
+        self._nodes_by_node.setdefault(id(context.node), []).append(context)
+        self._nodes_by_path[context.path] = context
 
     def register_processed_dir(self, dir_path: str) -> None:
         """
@@ -95,7 +134,7 @@ class NodeRegistry:
         """
         return [context.path for context in self._nodes_by_name.get(name, [])]
 
-    def get_context_by_path(self, path: str) -> Optional[NodeContext]:
+    def get_context_by_path(self, path: str) -> NodeContext | None:
         """
         Get the context for a specific path.
 
@@ -119,11 +158,22 @@ class NodeRegistry:
         """
         return self._nodes_by_name.get(name, [])
 
+    def get_contexts_by_node(self, node: SchemaNode) -> list[NodeContext]:
+        """
+        Get all contexts registered for a specific schema node (by identity).
+
+        Useful when several schema nodes share the same semantical name.
+        """
+        return self._nodes_by_node.get(id(node), [])
+
     def iter_contexts(self) -> Iterator[NodeContext]:
         """
-        Iterate over all registered contexts.
+        Iterate over all registered contexts in registration (depth first) order.
 
         Returns:
             Iterator over all NodeContext objects
         """
         return iter(self._nodes_by_path.values())
+
+    def __len__(self) -> int:
+        return len(self._nodes_by_path)

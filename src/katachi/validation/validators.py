@@ -1,13 +1,642 @@
-from typing import Any, Optional
+"""
+Validation engine.
+
+Validation happens in three phases:
+
+1. **Structure** - the directory tree is matched against the schema. Every entry of a
+   directory must match one of the schema children (trying them in order and
+   backtracking when a candidate fails deeper down), and every child must be matched the
+   required number of times (``required`` / ``min_count`` / ``max_count``).
+2. **Predicates** - relationships between matched entries (e.g. paired files) are checked,
+   scoped to the directory instance the predicate is declared in.
+3. **Actions** - registered callbacks run for matched entries.
+
+Only the matches that were finally chosen are registered, so predicates and actions never
+see entries from discarded alternatives.
+"""
+
+from __future__ import annotations
+
+import gc
+import re
+from collections.abc import Iterator, Sequence
+from contextlib import contextmanager
+from fnmatch import fnmatchcase
+from typing import Any, TypeVar
 
 from fsspec import AbstractFileSystem
 
-from katachi.schema.actions import ActionRegistry, ActionResult, ActionTiming, process_node
+from katachi.schema.actions import ActionRegistry, ActionResult, ActionTiming
 from katachi.schema.actions import NodeContext as ActionNodeContext
 from katachi.schema.schema_node import SchemaDirectory, SchemaFile, SchemaNode, SchemaPredicateNode
 from katachi.utils.logger import logger
 from katachi.validation.core import ValidationReport, ValidationResult, ValidatorRegistry
-from katachi.validation.registry import NodeRegistry
+from katachi.validation.predicates import PredicateRegistry
+from katachi.validation.registry import NodeContext, NodeRegistry
+from katachi.validation.snapshot import Entry, FsSnapshot, default_workers
+
+DEFAULT_REMOTE_WORKERS = 16
+
+Parents = tuple[tuple[SchemaNode, str], ...]
+
+
+Scope = dict[str, str]
+
+#: A committed match: (node, path, parents, captures)
+_Binding = tuple[SchemaNode, str, Parents, Scope]
+
+
+class _Match:
+    __slots__ = ("bindings", "issues", "local_failed", "ok")
+
+    def __init__(
+        self,
+        ok: bool,
+        issues: list[ValidationResult] | None = None,
+        bindings: list[_Binding] | None = None,
+        local_failed: bool = False,
+    ):
+        self.ok = ok
+        self.issues = issues if issues is not None else []
+        self.bindings = bindings if bindings is not None else []
+        self.local_failed = local_failed
+
+
+def _issue(
+    node: SchemaNode, path: str, validator: str, message: str, severity: str = "error", **context: Any
+) -> ValidationResult:
+    return ValidationResult(
+        is_valid=False,
+        message=message,
+        path=path,
+        validator_name=validator,
+        node_origin=node.semantical_name,
+        context=context or None,
+        severity=severity,
+    )
+
+
+def _has_errors(issues: list[ValidationResult]) -> bool:
+    return any(i.severity == "error" for i in issues)
+
+
+def _kind(node: SchemaNode) -> str:
+    return "directory" if isinstance(node, SchemaDirectory) else "file"
+
+
+def _format_size(size: int) -> str:
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1024
+    return f"{size} B"  # pragma: no cover
+
+
+def _owner_name(uid: int) -> str | None:
+    try:
+        import pwd
+    except ImportError:  # pragma: no cover - not available on Windows
+        return None
+    try:
+        return pwd.getpwuid(uid).pw_name
+    except KeyError:
+        return None
+
+
+def _needs_metadata(node: SchemaNode) -> bool:
+    if node.permissions is not None or node.owner is not None:
+        return True
+    return isinstance(node, SchemaFile) and (node.min_size is not None or node.max_size is not None)
+
+
+_NO_CAPTURES: Scope = {}
+
+
+def _captures(match: re.Match) -> Scope:
+    """Named groups of a match; groups that didn't participate capture an empty string."""
+    return {k: v or "" for k, v in match.groupdict().items()}
+
+
+class _ChildPlan:
+    """Precomputed matching strategy for one schema child."""
+
+    __slots__ = ("exact", "extensions", "is_file", "kind", "leaf", "node", "pattern")
+
+    def __init__(self, node: SchemaNode, has_custom_validators: bool):
+        self.node = node
+        self.kind = _kind(node)
+        self.is_file = isinstance(node, SchemaFile)
+        self.extensions: tuple[str, ...] = node.extensions if isinstance(node, SchemaFile) else ()
+        self.pattern = node.pattern_validation
+        #: whether :meth:`prefilter` exactly decides the type/name/extension checks (no templates or case rules)
+        self.exact = node.has_exact_prefilter
+        is_leaf = not (isinstance(node, SchemaDirectory) and node.structural_children)
+        #: whether a prefilter hit is a complete match (nothing else to check)
+        self.leaf = self.exact and is_leaf and not _needs_metadata(node) and not has_custom_validators
+
+    def prefilter(self, entry: Entry) -> Scope | None:
+        """
+        Type + name check, with the same semantics as the full checks in ``_Matcher.local_issues``.
+
+        Returns:
+            The captured groups (possibly empty, do not mutate) when the entry passes, None otherwise
+        """
+        if entry.type != self.kind:
+            return None
+        name = entry.name
+        pattern = self.pattern
+        if self.is_file and self.extensions:
+            for ext in self.extensions:
+                if name.endswith(ext) and len(name) > len(ext):
+                    if pattern is None:
+                        return _NO_CAPTURES
+                    m = pattern.fullmatch(name[: -len(ext)])
+                    if m is not None:
+                        return _captures(m) if pattern.groupindex else _NO_CAPTURES
+            return None
+        if pattern is None:
+            return _NO_CAPTURES
+        m = pattern.fullmatch(name)
+        if m is None:
+            return None
+        return _captures(m) if pattern.groupindex else _NO_CAPTURES
+
+
+class _Matcher:
+    """Matches a filesystem snapshot against a schema tree."""
+
+    def __init__(self, snapshot: FsSnapshot, ignore: Sequence[str] = ()):
+        self.snapshot = snapshot
+        self.ignore = list(ignore)
+        self.entries_checked = 0
+        self._warned_unsupported: set[str] = set()
+        self._has_custom_validators = bool(ValidatorRegistry.names())
+        self._plans: dict[int, list[_ChildPlan]] = {}
+        self._failed: dict[tuple[int, str, tuple[tuple[str, str], ...]], _Match] = {}
+
+    # -- local checks ---------------------------------------------------------------
+
+    def local_issues(
+        self, node: SchemaNode, entry: Entry, scope: Scope | None = None
+    ) -> tuple[list[ValidationResult], Scope | None]:
+        """
+        Checks that only look at the entry itself (type, name, extension, size, permissions, owner).
+
+        Returns:
+            The issues, and the named groups captured by the node's pattern
+        """
+        if isinstance(node, SchemaFile):
+            issues, captures = self._file_issues(node, entry, scope)
+        elif isinstance(node, SchemaDirectory):
+            issues, captures = self._directory_issues(node, entry, scope)
+        else:
+            return [_issue(node, entry.path, "schema_type", f"Unknown schema node type: {type(node).__name__}")], None
+        if issues:
+            return issues, None
+        return self._metadata_issues(node, entry), captures
+
+    def _name_issues(
+        self, node: SchemaNode, entry: Entry, name: str, scope: Scope | None, validator: str, label: str
+    ) -> tuple[list[ValidationResult], Scope | None]:
+        captures: Scope | None = None
+        pattern = node.resolve_pattern(scope)
+        if pattern is not None:
+            m = pattern.fullmatch(name)
+            if m is None:
+                return [
+                    _issue(
+                        node,
+                        entry.path,
+                        validator,
+                        f"{label} does not match pattern: {pattern.pattern} (got '{name}')",
+                    )
+                ], None
+            if pattern.groupindex:
+                captures = _captures(m)
+        if node.name_case_regex is not None and node.name_case_regex.fullmatch(name) is None:
+            return [_issue(node, entry.path, "name_case", f"{label} '{name}' is not {node.name_case}")], None
+        return [], captures
+
+    def _file_issues(
+        self, node: SchemaFile, entry: Entry, scope: Scope | None
+    ) -> tuple[list[ValidationResult], Scope | None]:
+        if not entry.is_file:
+            return [
+                _issue(node, entry.path, "file_exists", f"Expected a file but '{entry.name}' is a {entry.type}")
+            ], None
+        issues: list[ValidationResult] = []
+        captures: Scope | None = None
+        stems = [entry.name[: -len(e)] for e in node.extensions if entry.name.endswith(e) and len(entry.name) > len(e)]
+        if node.extensions and not stems:
+            dot = entry.name.rfind(".")  # a leading dot (".DS_Store") starts a hidden name, not an extension
+            actual = entry.name[dot:] if dot > 0 else "no extension"
+            expected = " or ".join(node.declared_extensions)
+            issues.append(
+                _issue(
+                    node, entry.path, "file_extension", f"File extension mismatch: expected {expected}, got {actual}"
+                )
+            )
+            stems = [entry.name[:dot] if dot > 0 else entry.name]
+        elif not node.extensions:
+            stems = [entry.name]
+        name_issues: list[ValidationResult] = []
+        for stem in stems:
+            name_issues, captures = self._name_issues(node, entry, stem, scope, "file_pattern", "Filename")
+            if not name_issues:
+                break
+        issues.extend(name_issues)
+        if (node.min_size is not None or node.max_size is not None) and entry.size is not None:
+            if node.min_size is not None and entry.size < node.min_size:
+                issues.append(
+                    _issue(
+                        node,
+                        entry.path,
+                        "file_size",
+                        f"File is too small: {_format_size(entry.size)} < minimum {_format_size(node.min_size)}",
+                    )
+                )
+            if node.max_size is not None and entry.size > node.max_size:
+                issues.append(
+                    _issue(
+                        node,
+                        entry.path,
+                        "file_size",
+                        f"File is too large: {_format_size(entry.size)} > maximum {_format_size(node.max_size)}",
+                    )
+                )
+        return issues, captures
+
+    def _directory_issues(
+        self, node: SchemaDirectory, entry: Entry, scope: Scope | None
+    ) -> tuple[list[ValidationResult], Scope | None]:
+        if not entry.is_dir:
+            return [
+                _issue(
+                    node, entry.path, "directory_exists", f"Expected a directory but '{entry.name}' is a {entry.type}"
+                )
+            ], None
+        return self._name_issues(node, entry, entry.name, scope, "directory_pattern", "Directory name")
+
+    def _warn_unsupported(self, what: str) -> None:
+        if what not in self._warned_unsupported:
+            self._warned_unsupported.add(what)
+            logger.warning(f"The filesystem does not report {what}; '{what}' checks are skipped")
+
+    def _metadata_issues(self, node: SchemaNode, entry: Entry) -> list[ValidationResult]:
+        issues = []
+        expected_mode = node.expected_mode
+        if expected_mode is not None:
+            if entry.mode is None:
+                self._warn_unsupported("permissions")
+            else:
+                mask = node.permissions_mask
+                actual = entry.mode & mask
+                if actual != expected_mode & mask:
+                    issues.append(
+                        _issue(
+                            node,
+                            entry.path,
+                            "permissions",
+                            f"Expected permissions {expected_mode & mask:04o}, got {actual:04o}",
+                        )
+                    )
+        if node.owner is not None:
+            if entry.uid is None:
+                self._warn_unsupported("owner")
+            else:
+                owner_name = _owner_name(entry.uid)
+                if node.owner not in (owner_name, str(entry.uid)):
+                    shown = f"{owner_name} (uid {entry.uid})" if owner_name else f"uid {entry.uid}"
+                    issues.append(_issue(node, entry.path, "owner", f"Expected owner {node.owner}, got {shown}"))
+        return issues
+
+    # -- matching -------------------------------------------------------------------
+
+    def match(self, node: SchemaNode, entry: Entry, parents: Parents, scope: Scope | None = None) -> _Match:
+        """Match an entry (and, for directories, its whole subtree) against a node."""
+        scope = scope if scope is not None else {}
+        if not (isinstance(node, SchemaDirectory) and node.structural_children):
+            return self._match(node, entry, parents, scope)
+        # A failure doesn't depend on the parents (they only end up in bindings): remember failed
+        # directory matches, so backtracking/rebalancing never re-evaluates the same subtree twice
+        key = (id(node), entry.path, tuple(sorted(scope.items())))
+        failed = self._failed.get(key)
+        if failed is not None:
+            return failed
+        result = self._match(node, entry, parents, scope)
+        if not result.ok:
+            self._failed[key] = result
+        return result
+
+    def _match(self, node: SchemaNode, entry: Entry, parents: Parents, scope: Scope) -> _Match:
+        issues, captures = self.local_issues(node, entry, scope)
+        if issues:
+            return _Match(False, issues, local_failed=True)
+        if self._has_custom_validators:
+            custom = [r for r in ValidatorRegistry.run_validators(node, entry.path) if not r.is_valid]
+            if _has_errors(custom):
+                return _Match(False, custom)
+            issues = custom
+        scope = _merge(scope, captures or {})
+
+        result = _Match(True, issues, [(node, entry.path, parents, scope)])
+        if isinstance(node, SchemaDirectory) and node.structural_children:
+            self._match_children(node, entry, (*parents, (node, entry.path)), scope, result)
+            result.ok = not _has_errors(result.issues)
+        return result
+
+    def _plan(self, node: SchemaDirectory) -> list[_ChildPlan]:
+        plan = self._plans.get(id(node))
+        if plan is None:
+            plan = [_ChildPlan(c, self._has_custom_validators) for c in node.structural_children]
+            self._plans[id(node)] = plan
+        return plan
+
+    def _is_ignored(self, node: SchemaDirectory, name: str) -> bool:
+        return node.is_ignored(name) or any(fnmatchcase(name, pattern) for pattern in self.ignore)
+
+    def _match_children(
+        self, node: SchemaDirectory, entry: Entry, parents: Parents, scope: Scope, result: _Match
+    ) -> None:
+        try:
+            child_entries = self.snapshot.listdir(entry.path)
+        except OSError as e:
+            result.issues.append(_issue(node, entry.path, "directory_listing", f"Cannot list directory: {e}"))
+            return
+
+        plan = self._plan(node)
+        counts = [0] * len(plan)
+        check_ignore = bool(node.ignore or self.ignore)
+        bindings = result.bindings
+        issues = result.issues
+        #: (index, entry, bindings start/end, issues start/end) of every matched entry, to rebalance counts
+        assigned: list[tuple[int, Entry, int, int, int, int]] = []
+        for child_entry in child_entries:
+            if check_ignore and self._is_ignored(node, child_entry.name):
+                continue
+            self.entries_checked += 1
+            attempts: list[tuple[int, _Match]] = []
+            for index, step in enumerate(plan):
+                if step.exact:
+                    # Exact prefilter on type + name: skip nodes that can't possibly match
+                    if child_entry.type != step.kind:
+                        continue
+                    captures = step.prefilter(child_entry)
+                    if captures is None:
+                        continue
+                    if step.leaf:
+                        start = len(bindings)
+                        bindings.append((step.node, child_entry.path, parents, _merge(scope, captures)))
+                        assigned.append((index, child_entry, start, start + 1, len(issues), len(issues)))
+                        counts[index] += 1
+                        break
+                match = self.match(step.node, child_entry, parents, scope)
+                if match.ok:
+                    counts[index] += 1
+                    b_start, i_start = len(bindings), len(issues)
+                    bindings.extend(match.bindings)
+                    issues.extend(match.issues)
+                    assigned.append((index, child_entry, b_start, len(bindings), i_start, len(issues)))
+                    break
+                if not match.local_failed:
+                    attempts.append((index, match))
+            else:
+                if attempts:
+                    # The entry is there (its name matched) but broken deeper down: report the deeper
+                    # problem and still count it, so the parent doesn't also claim it is missing
+                    index, best = min(attempts, key=lambda a: len(a[1].issues))
+                    counts[index] += 1
+                    issues.extend(best.issues)
+                elif not node.allow_extra:
+                    issues.extend(self._explain_unmatched(child_entry, node, scope))
+
+        if any(self._count_violated(step.node, count) for step, count in zip(plan, counts, strict=True)):
+            _Rebalancer(self, plan, counts, assigned, parents, scope).run(result)
+
+        for index, step in enumerate(plan):
+            result.issues.extend(self._count_issues(entry, step.node, counts[index]))
+
+    @staticmethod
+    def _count_violated(node: SchemaNode, count: int) -> bool:
+        return count < node.effective_min_count or (node.max_count is not None and count > node.max_count)
+
+    def _explain_unmatched(self, entry: Entry, parent: SchemaDirectory, scope: Scope) -> list[ValidationResult]:
+        """Explain why an entry matched none of the children of its directory."""
+        children = parent.structural_children
+        local = [self.local_issues(child, entry, scope)[0] for child in children]
+        hint = self._case_hint(entry, children, scope)
+        suffix = f" ({hint})" if hint else ""
+        # Only one possible node: its specific errors are the most helpful
+        if len(children) == 1 and local[0]:
+            issues = local[0]
+            if suffix:
+                issues[0].message += suffix
+            return issues
+        expected = ", ".join(f"{c.semantical_name} ({c.describe_constraints()})" for c in children)
+        reasons = {c.semantical_name: [i.message for i in issues] for c, issues in zip(children, local, strict=False)}
+        kind = "directory" if entry.is_dir else "file" if entry.is_file else entry.type
+        message = f"Unexpected {kind} '{entry.name}': does not match any of {expected}{suffix}"
+        return [_issue(parent, entry.path, "unexpected_entry", message, reasons=reasons)]
+
+    def _case_hint(self, entry: Entry, children: list[SchemaNode], scope: Scope) -> str | None:
+        """Suggest a fix when an entry would match if only the letter case was different."""
+        for variant in (entry.name.lower(), entry.name.upper()):
+            if variant == entry.name:
+                continue
+            probe = Entry(entry.path, variant, entry.type, entry.size, entry.mode, entry.uid)
+            for child in children:
+                if not self.local_issues(child, probe, scope)[0]:
+                    return f"did you mean '{variant}' for {child.semantical_name}? names are case-sensitive"
+        if "." in entry.name:
+            stem, ext = entry.name.rsplit(".", 1)
+            for variant in (f"{stem}.{ext.lower()}", f"{stem}.{ext.upper()}"):
+                if variant == entry.name:
+                    continue
+                probe = Entry(entry.path, variant, entry.type, entry.size, entry.mode, entry.uid)
+                for child in children:
+                    if not self.local_issues(child, probe, scope)[0]:
+                        return f"did you mean '{variant}' for {child.semantical_name}? extensions are case-sensitive"
+        return None
+
+    def _count_issues(self, entry: Entry, child: SchemaNode, count: int) -> list[ValidationResult]:
+        minimum, maximum = child.effective_min_count, child.max_count
+        label = f"{_kind(child)} '{child.semantical_name}' ({child.describe_constraints()})"
+        if count < minimum:
+            if count == 0 and minimum == 1:
+                message = f"Missing required {label} in '{entry.name}'"
+            else:
+                message = f"Expected at least {minimum}x {label} in '{entry.name}', found {count}"
+            return [_issue(child, entry.path, "min_count", message, child.severity, expected=minimum, found=count)]
+        if maximum is not None and count > maximum:
+            message = f"Expected at most {maximum}x {label} in '{entry.name}', found {count}"
+            return [_issue(child, entry.path, "max_count", message, child.severity, expected=maximum, found=count)]
+        return []
+
+
+class _Assignment:
+    """An entry matched by the sibling node ``index``, and the slices of bindings/issues it produced."""
+
+    __slots__ = ("b_end", "b_start", "entry", "first_index", "i_end", "i_start", "index", "replacement")
+
+    def __init__(self, index: int, entry: Entry, b_start: int, b_end: int, i_start: int, i_end: int):
+        self.index = index
+        #: first-fit index: every node listed before it already rejected this entry
+        self.first_index = index
+        self.entry = entry
+        self.b_start, self.b_end = b_start, b_end
+        self.i_start, self.i_end = i_start, i_end
+        self.replacement: _Match | None = None
+
+
+class _Rebalancer:
+    """
+    Move entries between sibling nodes they fully match, so that ``min_count`` / ``max_count`` hold.
+
+    First-fit gives ``summary.csv`` to a catch-all ``*.csv`` node listed before a required ``summary``
+    node. Counts are repaired with augmenting paths (as in bipartite matching): to fill a node, an
+    entry is taken from a sibling with a spare entry, possibly through a chain of siblings
+    (A gives to B, B gives to C) so that every intermediate node keeps its count.
+    """
+
+    def __init__(
+        self,
+        matcher: _Matcher,
+        plan: list[_ChildPlan],
+        counts: list[int],
+        assigned: list[tuple[int, Entry, int, int, int, int]],
+        parents: Parents,
+        scope: Scope,
+    ):
+        self.matcher, self.plan, self.counts = matcher, plan, counts
+        self.assigned = [_Assignment(*a) for a in assigned]
+        self.parents, self.scope = parents, scope
+        self._cache: dict[tuple[int, int], _Match | None] = {}
+
+    def _minimum(self, index: int) -> int:
+        return self.plan[index].node.effective_min_count
+
+    def _has_room(self, index: int) -> bool:
+        maximum = self.plan[index].node.max_count
+        return maximum is None or self.counts[index] < maximum
+
+    def _match(self, pos: int, target: int) -> _Match | None:
+        """The (cached) clean match of assigned entry ``pos`` against sibling ``target``, if any."""
+        key = (pos, target)
+        if key not in self._cache:
+            assignment = self.assigned[pos]
+            step = self.plan[target]
+            match: _Match | None = None
+            # Nodes before the first-fit node already rejected the entry; the prefilter is exact
+            if target > assignment.first_index and not (step.exact and step.prefilter(assignment.entry) is None):
+                checked = self.matcher.entries_checked
+                candidate = self.matcher.match(step.node, assignment.entry, self.parents, self.scope)
+                self.matcher.entries_checked = checked  # re-checking isn't checking more entries
+                match = candidate if candidate.ok else None
+            self._cache[key] = match
+        return self._cache[key]
+
+    def _donor(self, source: int, target: int, used: set[int]) -> int | None:
+        """An entry currently in ``source`` that ``target`` also matches."""
+        for pos, assignment in enumerate(self.assigned):
+            if assignment.index == source and pos not in used and self._match(pos, target) is not None:
+                return pos
+        return None
+
+    def _move(self, pos: int, target: int) -> None:
+        assignment = self.assigned[pos]
+        self.counts[assignment.index] -= 1
+        self.counts[target] += 1
+        assignment.index = target
+        assignment.replacement = self._match(pos, target)
+        # The entry's matches against other targets were computed for its original node only
+        for key in [k for k in self._cache if k[0] == pos]:
+            del self._cache[key]
+
+    def _augment(self, start: int, forward: bool) -> bool:
+        """
+        Find and apply one augmenting path.
+
+        Backward (``forward=False``): give ``start`` one more entry, taken from a node with a spare one.
+        Forward: move one entry out of ``start`` into a node with room.
+        """
+        n = len(self.plan)
+        previous: dict[int, tuple[int, int] | None] = {start: None}
+        queue = [start]
+        used: set[int] = set()
+        while queue:
+            node = queue.pop(0)
+            for other in range(n):
+                if other in previous:
+                    continue
+                source, target = (node, other) if forward else (other, node)
+                pos = self._donor(source, target, used)
+                if pos is None:
+                    continue
+                used.add(pos)
+                previous[other] = (node, pos)
+                done = self._has_room(other) if forward else self.counts[other] > self._minimum(other)
+                if done:
+                    # Apply the moves along the path, from the end back to `start`
+                    while previous[other] is not None:
+                        back, moved = previous[other]  # type: ignore[misc]
+                        self._move(moved, other if forward else back)
+                        other = back
+                    return True
+                queue.append(other)
+        return False
+
+    def run(self, result: _Match) -> None:
+        for index in range(len(self.plan)):
+            while self.counts[index] < self._minimum(index) and self._augment(index, forward=False):
+                pass
+        for index, step in enumerate(self.plan):
+            maximum = step.node.max_count
+            while maximum is not None and self.counts[index] > maximum and self._augment(index, forward=True):
+                pass
+        moved = [(a, a.replacement) for a in self.assigned if a.replacement is not None]
+        if moved:
+            result.bindings = _replace_slices(result.bindings, [(a.b_start, a.b_end, m.bindings) for a, m in moved])
+            result.issues = _replace_slices(result.issues, [(a.i_start, a.i_end, m.issues) for a, m in moved])
+
+
+T = TypeVar("T")
+
+
+def _replace_slices(items: list[T], replacements: list[tuple[int, int, list[T]]]) -> list[T]:
+    """Replace ``items[start:end]`` with the given lists (non-overlapping slices), keeping the order."""
+    out: list[T] = []
+    last = 0
+    for start, end, new in sorted(replacements, key=lambda r: r[0]):
+        out.extend(items[last:start])
+        out.extend(new)
+        last = end
+    out.extend(items[last:])
+    return out
+
+
+def _merge(scope: Scope, captures: Scope) -> Scope:
+    """Add captures to the scope; an empty (non participating) group doesn't hide an ancestor's value."""
+    if not captures:
+        return scope
+    return {**scope, **{k: v for k, v in captures.items() if v or k not in scope}}
+
+
+@contextmanager
+def _gc_paused() -> Iterator[None]:
+    """
+    Pause the cyclic garbage collector.
+
+    Validation allocates millions of small, acyclic, long-lived objects; the collector
+    repeatedly rescanning them costs ~45% of the run time on a 1M file tree.
+    """
+    was_enabled = gc.isenabled()
+    gc.disable()
+    try:
+        yield
+    finally:
+        if was_enabled:
+            gc.enable()
 
 
 class SchemaValidator:
@@ -17,10 +646,12 @@ class SchemaValidator:
     def validate_schema(
         schema: SchemaNode,
         target_path: str,
-        fs: AbstractFileSystem,
+        fs: AbstractFileSystem | None = None,
         execute_actions: bool = False,
-        parent_contexts: Optional[list[ActionNodeContext]] = None,
-        context: Optional[dict[str, Any]] = None,
+        parent_contexts: list[ActionNodeContext] | None = None,
+        context: dict[str, Any] | None = None,
+        ignore: Sequence[str] = (),
+        workers: int | None = None,
     ) -> ValidationReport:
         """
         Validate a target path against a schema node recursively.
@@ -28,48 +659,98 @@ class SchemaValidator:
         Args:
             schema: Schema node to validate against
             target_path: Path to validate
-            fs: Filesystem to use for validation
+            fs: Filesystem to use for validation (local filesystem by default)
             execute_actions: Whether to execute registered actions
             parent_contexts: List of parent (node, path) tuples for context
-            context: Additional context data
+            context: Additional context data passed to actions
+            ignore: Glob patterns of entry names to skip everywhere (e.g. ``.DS_Store``)
+            workers: Number of concurrent directory listings used to prefetch remote
+                filesystems (defaults to 16 for object stores such as S3/GCS/Azure, 1 otherwise)
 
         Returns:
             ValidationReport with all validation results
         """
-        # Create a registry to collect validated nodes
+        with _gc_paused():
+            return SchemaValidator._validate(
+                schema, target_path, fs, execute_actions, parent_contexts, context, ignore, workers
+            )
+
+    @staticmethod
+    def _validate(
+        schema: SchemaNode,
+        target_path: str,
+        fs: AbstractFileSystem | None,
+        execute_actions: bool,
+        parent_contexts: list[ActionNodeContext] | None,
+        context: dict[str, Any] | None,
+        ignore: Sequence[str],
+        workers: int | None,
+    ) -> ValidationReport:
+        if fs is None:
+            from fsspec.implementations.local import LocalFileSystem
+
+            fs = LocalFileSystem()
+        report = ValidationReport()
+        snapshot = FsSnapshot(fs)
+        matcher = _Matcher(snapshot, ignore)
+
+        logger.debug(f"Validating {target_path} against schema {schema.semantical_name}")
+        root = snapshot.info(target_path)
+        if root is None:
+            report.root_path = target_path
+            report.add_result(
+                _issue(schema, target_path, f"{_kind(schema)}_exists", f"Path does not exist: {target_path}")
+            )
+            return report
+        report.root_path = root.path
+
+        if workers is None:
+            workers = default_workers(fs, DEFAULT_REMOTE_WORKERS)
+        if isinstance(schema, SchemaDirectory) and root.is_dir:
+            snapshot.prefetch(schema, root, workers, ignore)
+
+        # Phase 1: structure
+        matcher.entries_checked = 1
+        match = matcher.match(schema, root, tuple(parent_contexts or ()))
+        report.add_results(match.issues)
+        report.stats.entries_checked = matcher.entries_checked
+        report.stats.directories_listed = snapshot.directories_listed
+
         registry = NodeRegistry()
+        matches = report.stats.matches
+        for node, path, parents, captures in match.bindings:
+            registry.add_context(NodeContext(node, path, parents=parents, captures=captures))
+            matches[node.semantical_name] += 1
+            if isinstance(node, SchemaDirectory):
+                registry.register_processed_dir(path)
+        report.context["registry"] = registry
 
-        # Perform structural validation and collect nodes
-        logger.debug(f"Validating schema at path: {target_path} against schema: {schema.semantical_name}")
-        report = SchemaValidator._validate_structure(
-            schema, target_path, fs, registry, execute_actions, parent_contexts, context
-        )
+        action_results: list[ActionResult] = []
+        if execute_actions:
+            action_results.extend(
+                ActionRegistry.run_for_contexts(registry.iter_contexts(), context, ActionTiming.DURING_VALIDATION)
+            )
+            report.context["action_results"] = action_results
 
-        # If structural validation failed, return early
         if not report.is_valid():
+            if any(isinstance(n, SchemaPredicateNode) for n in schema.iter_nodes()):
+                report.context["predicates_skipped"] = True
             return report
 
-        # Perform predicate evaluation using the registry
-        logger.debug(f"Evaluating predicates for schema: {schema.semantical_name} at path: {target_path}")
+        # Phase 2: predicates
         predicate_report = SchemaValidator._evaluate_predicates(schema, target_path, registry)
         report.add_results(predicate_report.results)
-
-        # If predicate validation failed, return early
         if not predicate_report.is_valid():
             return report
 
-        # Execute after-validation actions if requested
+        # Phase 3: after-validation actions
         if execute_actions:
-            action_results = SchemaValidator._execute_after_validation_actions(registry, context)
-            # Attach action results to the report's context
-            if action_results:
-                report.context["action_results"] = action_results
-
+            action_results.extend(SchemaValidator._execute_after_validation_actions(registry, context))
         return report
 
     @staticmethod
     def _execute_after_validation_actions(
-        registry: NodeRegistry, context: Optional[dict[str, Any]] = None
+        registry: NodeRegistry, context: dict[str, Any] | None = None
     ) -> list[ActionResult]:
         """
         Execute all registered actions that should run after validation.
@@ -84,107 +765,9 @@ class SchemaValidator:
         return ActionRegistry.execute_actions(registry=registry, context=context, timing=ActionTiming.AFTER_VALIDATION)
 
     @staticmethod
-    def _validate_structure(
-        schema: SchemaNode,
-        target_path: str,
-        fs: AbstractFileSystem,
-        registry: NodeRegistry,
-        execute_actions: bool = False,
-        parent_contexts: Optional[list[ActionNodeContext]] = None,
-        context: Optional[dict[str, Any]] = None,
-    ) -> ValidationReport:
+    def _evaluate_predicates(schema: SchemaNode, target_path: str, registry: NodeRegistry) -> ValidationReport:
         """
-        Validate the structure of a target path against a schema node.
-
-        Args:
-            schema: Schema node to validate against
-            target_path: Path to validate
-            fs: Filesystem to use for validation
-            registry: Registry to collect validated nodes
-            execute_actions: Whether to execute registered actions
-            parent_contexts: List of parent (node, path) tuples for context
-            context: Additional context data
-
-        Returns:
-            ValidationReport with structural validation results
-        """
-        logger.debug(f"Validating structure for schema: {schema.semantical_name} at path: {target_path}")
-        # Initialize parent_contexts and context if needed
-        parent_contexts = parent_contexts or []
-        context = context or {}
-
-        # Create a report to collect validation results
-        report = ValidationReport()
-
-        # Run standard validation for this node
-        node_report = SchemaValidator.validate_node(schema, target_path, fs)
-        logger.debug(f"Validating node: {schema.semantical_name} at path: {target_path}")
-        report.add_results(node_report.results)
-
-        # Run any custom validators
-        logger.debug(f"Running custom validators for node: {schema.semantical_name} at path: {target_path}")
-        custom_results = ValidatorRegistry.run_validators(schema, target_path)
-        report.add_results(custom_results)
-
-        # Early return if basic validation fails
-        if not node_report.is_valid():
-            return report
-
-        # Node passed validation - register it
-        parent_paths = [p for _, p in parent_contexts]
-        registry.register_node(schema, target_path, parent_paths)
-
-        # Execute actions if enabled and using legacy DURING_VALIDATION timing
-        if execute_actions:
-            process_node(schema, target_path, parent_contexts, context)
-
-        # For directories, validate children
-        if isinstance(schema, SchemaDirectory) and fs.isdir(target_path):
-            child_paths = fs.ls(target_path)
-
-            # Add current node to parent contexts before processing children
-            parent_contexts.append((schema, target_path))
-
-            for child_path in child_paths:
-                child_valid = False
-                child_reports = []
-
-                for child in schema.children:
-                    # Skip predicate nodes during structure validation
-                    if isinstance(child, SchemaPredicateNode):
-                        continue
-
-                    child_report = SchemaValidator._validate_structure(
-                        child, child_path, fs, registry, execute_actions, parent_contexts, context
-                    )
-
-                    child_reports.append(child_report)
-
-                    if child_report.is_valid():
-                        child_valid = True
-                        report.add_results(child_report.results)
-                        break
-
-                if not child_valid:
-                    for child_report in child_reports:
-                        report.add_results(child_report.results)
-
-            # Remove current node from parent contexts after processing all children
-            parent_contexts.pop()
-
-            # Register this directory as fully processed
-            registry.register_processed_dir(target_path)
-
-        return report
-
-    @staticmethod
-    def _evaluate_predicates(
-        schema: SchemaNode,
-        target_path: str,
-        registry: NodeRegistry,
-    ) -> ValidationReport:
-        """
-        Evaluate predicates using the registry of validated nodes.
+        Evaluate every predicate once per directory instance of the directory declaring it.
 
         Args:
             schema: Root schema node
@@ -195,160 +778,31 @@ class SchemaValidator:
             ValidationReport with predicate evaluation results
         """
         report = ValidationReport()
-
-        # Find and evaluate all predicate nodes
-        def traverse_for_predicates(node: SchemaNode, path: str) -> None:
-            if isinstance(node, SchemaPredicateNode):
-                # Evaluate this predicate
-                predicate_report = SchemaValidator.validate_predicate(node, path, registry)
-                report.add_results(predicate_report.results)
-
-            # Recursively check children for predicates
-            if isinstance(node, SchemaDirectory):
-                for child in node.children:
-                    # Use the node's path to build the child path
-                    child_path = (
-                        f"{path}/{child.semantical_name}" if not isinstance(child, SchemaPredicateNode) else path
-                    )
-                    traverse_for_predicates(child, child_path)
-
-        # Start traversal from root
-        traverse_for_predicates(schema, target_path)
-
-        return report
-
-    @staticmethod
-    def validate_node(node: SchemaNode, path: str, fs: AbstractFileSystem) -> ValidationReport:
-        """
-        Validate a path against a schema node.
-
-        Args:
-            node: Schema node to validate against
-            path: Path to validate
-            fs: Filesystem to use for validation
-
-        Returns:
-            ValidationReport with results
-        """
-        if isinstance(node, SchemaFile):
-            return SchemaValidator.validate_file(node, path, fs)
-        elif isinstance(node, SchemaDirectory):
-            return SchemaValidator.validate_directory(node, path, fs)
-        elif isinstance(node, SchemaPredicateNode):
-            # Skip predicates during node validation, they're handled separately
-            return ValidationReport()
-        else:
-            logger.debug(f"Creating report for unknown schema node type: {type(node).__name__} at path: {path}")
-            report = ValidationReport()
-            report.add_result(
-                ValidationResult(
-                    is_valid=False,
-                    node_origin=node.semantical_name,
-                    message=f"Unknown schema node type: {type(node).__name__}",
-                    path=path,
-                    validator_name="schema_type",
-                )
-            )
+        owners = [n for n in schema.iter_nodes() if isinstance(n, SchemaDirectory) and n.predicates]
+        if not owners:
             return report
 
-    @staticmethod
-    def validate_file(node: SchemaFile, path: str, fs: AbstractFileSystem) -> ValidationReport:
-        """
-        Validate a file against a schema file node.
+        # Bucket every matched entry under each predicate-owning ancestor directory instance:
+        # buckets[(id(owner), owner_path)][semantical_name] -> contexts. O(entries * depth).
+        owner_ids = {id(o) for o in owners}
+        element_names = {e for o in owners for p in o.predicates for e in p.elements}
+        buckets: dict[tuple[int, str], dict[str, list[NodeContext]]] = {}
+        for ctx in registry.iter_contexts():
+            if ctx.node.semantical_name not in element_names:
+                continue
+            for parent_node, parent_path in ctx.parents:
+                if id(parent_node) in owner_ids:
+                    buckets.setdefault((id(parent_node), parent_path), {}).setdefault(
+                        ctx.node.semantical_name, []
+                    ).append(ctx)
 
-        Args:
-            node: Schema file node to validate against
-            path: Path to validate
-            fs: Filesystem to use for validation
-
-        Returns:
-            ValidationReport with results
-        """
-        report = ValidationReport()
-
-        # Check if path exists and is a file
-        if not fs.isfile(path):
-            report.add_result(
-                ValidationResult(
-                    is_valid=False,
-                    node_origin=node.semantical_name,
-                    message=f"Path does not exist or is not a file: {path}",
-                    path=path,
-                    validator_name="file_exists",
-                )
-            )
-            return report
-
-        # Check file extension
-        if node.extension and not path.endswith(node.extension):
-            report.add_result(
-                ValidationResult(
-                    is_valid=False,
-                    node_origin=node.semantical_name,
-                    message=f"File extension mismatch: expected {node.extension}, got {path.split('.')[-1]}",
-                    path=path,
-                    validator_name="file_extension",
-                )
-            )
-
-        # Check pattern validation if specified
-        if node.pattern_validation:
-            filename = path.split("/")[-1]
-            if not node.pattern_validation.match(filename):
-                report.add_result(
-                    ValidationResult(
-                        is_valid=False,
-                        node_origin=node.semantical_name,
-                        message=f"Filename does not match pattern: {node.pattern_validation.pattern}",
-                        path=path,
-                        validator_name="file_pattern",
+        for owner in owners:
+            for instance in registry.get_contexts_by_node(owner):
+                bucket = buckets.get((id(owner), instance.path), {})
+                for predicate in owner.predicates:
+                    report.add_results(
+                        SchemaValidator.validate_predicate(predicate, instance.path, registry, bucket).results
                     )
-                )
-
-        return report
-
-    @staticmethod
-    def validate_directory(node: SchemaDirectory, path: str, fs: AbstractFileSystem) -> ValidationReport:
-        """
-        Validate a directory against a schema directory node.
-
-        Args:
-            node: Schema directory node to validate against
-            path: Path to validate
-            fs: Filesystem to use for validation
-
-        Returns:
-            ValidationReport with results
-        """
-        report = ValidationReport()
-
-        # Check if path exists and is a directory
-        if not fs.isdir(path):
-            report.add_result(
-                ValidationResult(
-                    is_valid=False,
-                    node_origin=node.semantical_name,
-                    message=f"Path does not exist or is not a directory: {path}",
-                    path=path,
-                    validator_name="directory_exists",
-                )
-            )
-            return report
-
-        # Check pattern validation if specified
-        if node.pattern_validation:
-            dirname = path.split("/")[-1]
-            if not node.pattern_validation.match(dirname):
-                report.add_result(
-                    ValidationResult(
-                        is_valid=False,
-                        node_origin=node.semantical_name,
-                        message=f"Directory name does not match pattern: {node.pattern_validation.pattern}",
-                        path=path,
-                        validator_name="directory_pattern",
-                    )
-                )
-
         return report
 
     @staticmethod
@@ -356,47 +810,46 @@ class SchemaValidator:
         predicate_node: SchemaPredicateNode,
         path: str,
         registry: NodeRegistry,
+        elements: dict[str, list[NodeContext]] | None = None,
     ) -> ValidationReport:
         """
-        Validate a predicate node against the registry of validated nodes.
+        Validate a predicate node for one directory instance.
 
         Args:
             predicate_node: Predicate node to validate
-            path: Path being validated
+            path: Path of the directory instance the predicate is evaluated in
             registry: Registry of validated nodes
+            elements: Matched contexts inside the directory instance, keyed by semantical name.
+                When omitted, all matched contexts in the registry are used.
 
         Returns:
             ValidationReport with results
         """
         report = ValidationReport()
-
-        # Get all contexts for the elements this predicate operates on
-        element_contexts = []
-        for element_name in predicate_node.elements:
-            contexts = registry.get_contexts_by_name(element_name)
-            if not contexts:
-                report.add_result(
-                    ValidationResult(
-                        is_valid=False,
-                        node_origin=predicate_node.semantical_name,
-                        message=f"Required element '{element_name}' not found in validated nodes",
-                        path=path,
-                        validator_name="predicate_element",
-                    )
+        func = PredicateRegistry.get(predicate_node.predicate_type)
+        if func is None:
+            report.add_result(
+                _issue(
+                    predicate_node,
+                    path,
+                    "predicate",
+                    f"Unknown predicate type '{predicate_node.predicate_type}'. "
+                    f"Available: {', '.join(PredicateRegistry.names())}",
                 )
-                return report
-            element_contexts.append(contexts)
-
-        # TODO: Implement actual predicate validation logic
-        # For now, just return a placeholder result
-        report.add_result(
-            ValidationResult(
-                is_valid=True,
-                node_origin=predicate_node.semantical_name,
-                message=f"Predicate '{predicate_node.predicate_type}' validation not implemented",
-                path=path,
-                validator_name="predicate",
             )
-        )
+            return report
 
+        if elements is None:
+            elements = {name: registry.get_contexts_by_name(name) for name in predicate_node.elements}
+        selected = {name: list(elements.get(name, [])) for name in predicate_node.elements}
+        try:
+            results = func(predicate_node, path, selected)
+            for result in results:
+                if not result.is_valid:
+                    result.severity = predicate_node.severity
+            report.add_results(results)
+        except Exception as e:
+            report.add_result(
+                _issue(predicate_node, path, predicate_node.predicate_type, f"Predicate failed with an error: {e!s}")
+            )
         return report

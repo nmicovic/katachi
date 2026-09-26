@@ -7,209 +7,205 @@
 [![License](https://img.shields.io/github/license/nmicovic/katachi)](https://img.shields.io/github/license/nmicovic/katachi)
 
 <div align="center">
-  <img src="logo.png" alt="Logo" width="300"/>
+  <img src="https://raw.githubusercontent.com/nmicovic/katachi/main/logo.png" alt="Logo" width="300"/>
 </div>
 
-**Katachi** is a Python package for validating, processing, and parsing directory structures against defined schemas.
+**Katachi** (形, *"shape"*) checks that a directory tree has the shape you expect. Describe the
+structure once in YAML, then validate datasets, data lakes and project layouts, locally or on
+S3 / Azure Blob Storage / GCS, from the command line, in CI, or from Python.
 
-> **Note**: Katachi is currently under active development and should be considered a work in progress. APIs may change in future releases.
+```console
+$ katachi validate katachi.yaml datasets/yolo
+Validating datasets/yolo against katachi.yaml
+╭───┬─────────────────────┬───────────────────────────────────────────────────┬────────────────┬───────╮
+│   │ Path                │ Problem                                           │ Rule           │ Node  │
+├───┼─────────────────────┼───────────────────────────────────────────────────┼────────────────┼───────┤
+│ ✗ │ images/val/0003.JPG │ File extension mismatch: expected .jpg or .jpeg   │ file_extension │ image │
+│   │                     │ or .png or .bmp or .webp, got .JPG (did you mean  │                │       │
+│   │                     │ '0003.jpg' for image? names are case-sensitive)   │                │       │
+╰───┴─────────────────────┴───────────────────────────────────────────────────┴────────────────┴───────╯
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ✗ Invalid: 1 error · 727 entries checked in 0.00s · relationship checks skipped until structural     │
+│ errors are fixed                                                                                     │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────╯
+```
 
 - **GitHub repository**: <https://github.com/nmicovic/katachi/>
 - **Documentation**: <https://nmicovic.github.io/katachi/>
 
 ## Features
 
-- 📐 **Schema-based validation** - Define expected directory structures using YAML
-- 🧩 **Extensible architecture** - Create custom validators and actions
-- 🔄 **Relationship validation** - Validate relationships between files (like paired files)
-- 🚀 **Command-line interface** - Easy to use CLI with rich formatting
-- 📋 **Detailed reports** - Get comprehensive validation reports
+- 📐 **Declarative schemas** in YAML: name patterns, extensions, required entries, counts, sizes,
+  permissions, owners, naming conventions (`snake_case`, `kebab-case`, …)
+- 🔗 **Relationships** between files: *every image has a label*, *counts match*, *no duplicate ids*,
+  scoped per directory or across the whole tree
+- 🧬 **Captures**: a name captured by a directory pattern (`(?P<scene>scene_\d+)`) can be required in
+  its descendants (`{scene}_cam\d+.jpg`) and used to pair files (`key: "{split}/{stem}"`)
+- 🪄 **`katachi infer`** writes a schema from an existing directory, and **`katachi init`** ships templates
+  for YOLO, ImageFolder and cookiecutter-data-science layouts
+- ☁️ **Any filesystem** supported by [fsspec](https://filesystem-spec.readthedocs.io): local, `s3://`,
+  `abfs://`, `gs://`, `memory://`, zip archives, …
+- ⚡ **Fast**: every directory is listed once, remote directories are listed concurrently
+  (≈400× faster than v0.0.2 on high-latency storage, ≈3× locally; see [benchmarks](https://github.com/nmicovic/katachi/blob/main/benchmarks/README.md))
+- 🤖 **CI-ready**: exit codes, `--format json|github|text`, warnings vs errors, a pre-commit hook
+  and a GitHub Action
+- 🧩 **Extensible** in Python: actions that process matched files, custom validators and predicates
+- ✍️ **Editor completion** through a published JSON Schema
 
 ## Installation
 
-Install from PyPI:
-
 ```bash
-pip install katachi
+pip install katachi              # local filesystems
+pip install "katachi[azure]"     # + Azure Blob Storage (abfs://)
+pip install katachi s3fs         # + S3; any fsspec implementation works
 ```
 
-For development:
+## Quick start
+
+Generate a schema from a directory you consider correct, or start from a template:
 
 ```bash
-git clone https://github.com/nmicovic/katachi.git
-cd katachi
-make install
+katachi infer data/ -o katachi.yaml       # infer from an existing tree
+katachi init --template yolo              # or: basic, imagefolder, cookiecutter-data-science
 ```
 
-## Quick Start
-
-### Define a schema (schema.yaml)
+A schema describes the tree top-down:
 
 ```yaml
-semantical_name: data
+# yaml-language-server: $schema=https://raw.githubusercontent.com/nmicovic/katachi/main/katachi.schema.json
+semantical_name: dataset
 type: directory
-pattern_name: data
+ignore: [".*"]                      # skip .DS_Store, .git, ...
 children:
-  - semantical_name: image
-    pattern_name: "img\\d+"
+  - semantical_name: readme
     type: file
-    extension: .jpg
-    description: "Image files with numeric identifiers"
-  - semantical_name: metadata
-    pattern_name: "img\\d+"
-    type: file
-    extension: .json
-    description: "Metadata for image files"
-  - semantical_name: file_pairs_check
-    type: predicate
-    predicate_type: pair_comparison
-    description: "Check if images have matching metadata files"
-    elements:
-      - image
-      - metadata
+    pattern_name: README
+    extension: .md
+    required: true
+  - semantical_name: day
+    type: directory
+    pattern_name: "\\d{4}-\\d{2}-\\d{2}"    # regex, must match the whole name
+    min_count: 1
+    children:
+      - semantical_name: image
+        type: file
+        pattern_name: "img_\\d+"
+        extension: [.jpg, .png]
+        max_size: 10485760          # 10 MB
+      - semantical_name: label
+        type: file
+        pattern_name: "img_\\d+"
+        extension: .json
+      - semantical_name: labeled
+        type: predicate
+        predicate_type: pair_comparison   # img_1.jpg <-> img_1.json, per day
+        elements: [image, label]
 ```
 
-### Validate a directory structure
+Validate:
 
 ```bash
-katachi validate schema.yaml target_directory
+katachi validate katachi.yaml data/
+katachi validate katachi.yaml s3://bucket/data --format json      # machine readable
+katachi describe katachi.yaml                                      # show the schema as a tree
 ```
 
-## Command-Line Examples
+`validate` exits with **0** when the tree is valid, **1** when it is not (or, with `--strict`, when
+there are warnings) and **2** for invalid schemas or arguments.
 
-Validate a simple directory structure:
-```bash
-katachi validate "tests/schema_tests/test_sanity/schema.yaml" "tests/schema_tests/test_sanity/dataset"
+See the [schema reference](https://nmicovic.github.io/katachi/schema/) for every option.
+
+## Use it in CI
+
+**pre-commit**
+
+```yaml
+repos:
+  - repo: https://github.com/nmicovic/katachi
+    rev: v0.1.0
+    hooks:
+      - id: katachi
+        args: [katachi.yaml, data/]
 ```
 
-Validate a nested directory structure:
-```bash
-katachi validate "tests/schema_tests/test_depth_1/schema.yaml" "tests/schema_tests/test_depth_1/dataset"
-```
+**GitHub Actions** (problems are shown as annotations):
 
-Validate paired files (e.g., ensure each .jpg has a matching .json file):
-```bash
-katachi validate "tests/schema_tests/test_paired_files/schema.yaml" "tests/schema_tests/test_paired_files/data"
-```
-
-Validate Azure Blob Storage:
-```bash
-# Set Azure credentials in environment variables
-export AZURE_STORAGE_ACCOUNT="your_storage_account"
-export AZURE_STORAGE_ACCESS_KEY="your_access_key"
-# Or use SAS token
-export AZURE_STORAGE_SAS_TOKEN="your_sas_token"
-
-# Validate local schema against Azure Blob Storage
-katachi validate "schema.yaml" "abfs://container/path"
-
-# Validate schema in Azure Blob Storage against another Azure Blob Storage path
-katachi validate "abfs://container/schema.yaml" "abfs://container/path"
+```yaml
+- uses: nmicovic/katachi@v0.1.0
+  with:
+    schema: katachi.yaml
+    path: data/
 ```
 
 ## Python API
 
 ```python
-from pathlib import Path
-from katachi.schema.importer import load_yaml
-from katachi.schema.validate import validate_schema
+import katachi
 
-# Load schema from YAML
-schema = load_yaml(Path("schema.yaml"), Path("data_directory"))
+report = katachi.validate("katachi.yaml", "data/")  # or s3://..., abfs://..., a dict schema
+if not report.is_valid():
+    for problem in report.failures:
+        print(problem.path, problem.validator_name, problem.message)
 
-# Validate directory against schema
-report = validate_schema(schema, Path("data_directory"))
-
-# Check if validation passed
-if report.is_valid():
-    print("Validation successful!")
-else:
-    print("Validation failed with the following issues:")
-    for result in report.results:
-        if not result.is_valid:
-            print(f"- {result.path}: {result.message}")
+print(report.stats.matches)  # Counter of matched entries per schema node
+print(report.to_dict())  # JSON serializable
 ```
 
-### Using Azure Blob Storage
+### Process matched files with actions
+
+```python
+from katachi import register_action
+
+
+@register_action("image")
+def index_image(node, path, parents, context):
+    day = next(p for n, p in parents if n.semantical_name == "day")
+    context["index"].setdefault(day, []).append(path)
+
+
+index = {}
+report = katachi.validate("katachi.yaml", "data/", execute_actions=True, context={"index": index})
+```
+
+The same file can be used from the CLI: `katachi validate katachi.yaml data/ --plugin my_actions.py --execute-actions`.
+
+### Custom validators and predicates
 
 ```python
 import os
-from katachi.schema.importer import load_yaml
-from katachi.schema.validate import validate_schema
-from katachi.utils.fs_utils import get_filesystem
 
-# Set Azure credentials
-os.environ["AZURE_STORAGE_ACCOUNT"] = "your_storage_account"
-os.environ["AZURE_STORAGE_ACCESS_KEY"] = "your_access_key"
-# Or use SAS token
-# os.environ["AZURE_STORAGE_SAS_TOKEN"] = "your_sas_token"
+from katachi import ValidationResult, register_predicate, register_validator
 
-# Get filesystem for Azure Blob Storage
-target_fs = get_filesystem("abfs://container/path")
-schema_fs = get_filesystem("abfs://container/schema.yaml")
 
-# Load schema from Azure Blob Storage
-schema = load_yaml("schema.yaml", "path", schema_fs, target_fs)
+@register_validator("not_empty")
+def not_empty(node, path):
+    if node.semantical_name == "label" and os.path.getsize(path) == 0:
+        return [ValidationResult(False, "label file is empty", path, "not_empty", node.semantical_name)]
+    return []
 
-# Validate Azure Blob Storage path against schema
-report = validate_schema(schema, "path", target_fs)
 
-# Check validation results
-if report.is_valid():
-    print("Validation successful!")
-else:
-    print("Validation failed with the following issues:")
-    for result in report.results:
-        if not result.is_valid:
-            print(f"- {result.path}: {result.message}")
+@register_predicate("same_count")
+def same_count(predicate, dir_path, elements):
+    counts = {name: len(contexts) for name, contexts in elements.items()}
+    ok = len(set(counts.values())) <= 1
+    return [ValidationResult(ok, f"counts: {counts}", dir_path, "same_count", predicate.semantical_name)]
 ```
 
-## Extending Katachi
+See [extending Katachi](https://nmicovic.github.io/katachi/extending/) for details.
 
-### Custom validators
+### Azure Blob Storage
 
-```python
-from pathlib import Path
-from katachi.schema.schema_node import SchemaNode
-from katachi.validation.core import ValidationResult, ValidatorRegistry
-
-def my_custom_validator(node: SchemaNode, path: Path) -> ValidationResult:
-    # Custom validation logic
-    return ValidationResult(
-        is_valid=True,
-        message="Custom validation passed",
-        path=path,
-        validator_name="custom_validator"
-    )
-
-# Register the validator
-ValidatorRegistry.register("custom_validator", my_custom_validator)
-```
-
-### Custom file processing
-
-```python
-from pathlib import Path
-from typing import Any
-from katachi.schema.actions import register_action, NodeContext
-
-def process_image(node, path: Path, parent_contexts: list[NodeContext], context: dict[str, Any]) -> None:
-    # Custom image processing logic
-    print(f"Processing image: {path}")
-    # Access parent context if needed
-    for parent_node, parent_path in parent_contexts:
-        if parent_node.semantical_name == "timestamp":
-            print(f"Image from date: {parent_path.name}")
-            break
-
-# Register the action
-register_action("image", process_image)
+```bash
+pip install "katachi[azure]"
+export AZURE_STORAGE_ACCOUNT_NAME="your_storage_account"
+export AZURE_STORAGE_SAS_TOKEN="your_sas_token"      # or AZURE_STORAGE_ACCOUNT_KEY / AZURE_STORAGE_CONNECTION_STRING
+katachi validate abfs://container/schema.yaml abfs://container/path
 ```
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Contributions are welcome! See [CONTRIBUTING.md](https://github.com/nmicovic/katachi/blob/main/CONTRIBUTING.md) for details.
 
 ## License
 
-This project is licensed under the terms of the [MIT License](LICENSE).
+This project is licensed under the terms of the [MIT License](https://github.com/nmicovic/katachi/blob/main/LICENSE).
