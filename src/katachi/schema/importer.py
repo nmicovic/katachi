@@ -9,6 +9,7 @@ e.g. ``root.children[1] (images): unknown key 'patern_name' (did you mean 'patte
 from __future__ import annotations
 
 import re
+import reprlib
 from difflib import get_close_matches
 from typing import Any
 
@@ -49,6 +50,8 @@ ALLOWED_KEYS: dict[str, set[str]] = {
 
 #: Maximum number of nodes in a schema, counted after expanding YAML aliases (guards against alias bombs)
 MAX_SCHEMA_NODES = 100_000
+#: Maximum nesting depth of a schema
+MAX_SCHEMA_DEPTH = 200
 
 
 class SchemaError(ValueError):
@@ -68,7 +71,7 @@ def _suggest(key: str, options: set[str]) -> str:
 def _get_bool(data: dict[str, Any], key: str, location: str, default: bool = False) -> bool:
     value = data.get(key, default)
     if not isinstance(value, bool):
-        raise SchemaError(f"'{key}' must be true or false, got {value!r}", location)
+        raise SchemaError(f"'{key}' must be true or false, got {_short(value)}", location)
     return value
 
 
@@ -77,7 +80,7 @@ def _get_int(data: dict[str, Any], key: str, location: str) -> int | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 0:
-        raise SchemaError(f"'{key}' must be a non-negative integer, got {value!r}", location)
+        raise SchemaError(f"'{key}' must be a non-negative integer, got {_short(value)}", location)
     return int(value)
 
 
@@ -88,7 +91,7 @@ def _get_str(data: dict[str, Any], key: str, location: str) -> str | None:
     if isinstance(value, int | float) and not isinstance(value, bool):
         return str(value)
     if not isinstance(value, str):
-        raise SchemaError(f"'{key}' must be a string, got {value!r}", location)
+        raise SchemaError(f"'{key}' must be a string, got {_short(value)}", location)
     return value
 
 
@@ -99,7 +102,7 @@ def _get_str_list(data: dict[str, Any], key: str, location: str) -> list[str]:
     if isinstance(value, str):
         return [value]
     if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
-        raise SchemaError(f"'{key}' must be a string or a list of strings, got {value!r}", location)
+        raise SchemaError(f"'{key}' must be a string or a list of strings, got {_short(value)}", location)
     return value
 
 
@@ -110,16 +113,16 @@ def _get_pattern(data: dict[str, Any], location: str, available_vars: set[str]) 
         return None, set()
     if not isinstance(pattern, str):
         # e.g. an unquoted 0123 is read by YAML as the octal number 83
-        raise SchemaError(f"'pattern_name' must be a string, got {pattern!r} (quote the value in YAML)", location)
+        raise SchemaError(f"'pattern_name' must be a string, got {_short(pattern)} (quote the value in YAML)", location)
     try:
         compiled = re.compile(template_to_regex(pattern))
     except re.error as e:
-        raise SchemaError(f"invalid regular expression in 'pattern_name' {pattern!r}: {e}", location) from e
+        raise SchemaError(f"invalid regular expression in 'pattern_name' {_short(pattern)}: {e}", location) from e
     for var in PLACEHOLDER.findall(pattern):
         if var not in available_vars:
             known = f" (captured names available here: {', '.join(sorted(available_vars))})" if available_vars else ""
             raise SchemaError(
-                f"pattern_name {pattern!r} uses '{{{var}}}' but no parent pattern captures a group named "
+                f"pattern_name {_short(pattern)} uses '{{{var}}}' but no parent pattern captures a group named "
                 f"'{var}'; define it with (?P<{var}>...) in an ancestor's pattern_name{known}",
                 location,
             )
@@ -131,7 +134,7 @@ def _get_ignore(data: dict[str, Any], location: str) -> list[str]:
     for pattern in patterns:
         if "/" in pattern or "\\" in pattern:
             raise SchemaError(
-                f"ignore pattern {pattern!r} contains a path separator; ignore globs match entry names "
+                f"ignore pattern {_short(pattern)} contains a path separator; ignore globs match entry names "
                 f"(e.g. 'build' or '*.tmp'), declare them on the directory that contains the entry",
                 location,
             )
@@ -144,7 +147,7 @@ def _get_choice(data: dict[str, Any], key: str, choices: tuple[str, ...], locati
         return None
     if value not in choices:
         raise SchemaError(
-            f"invalid {key} {value!r}, expected one of: {', '.join(choices)}{_suggest(str(value), set(choices))}",
+            f"invalid {key} {_short(value)}, expected one of: {', '.join(choices)}{_suggest(str(value), set(choices))}",
             location,
         )
     return str(value)
@@ -157,24 +160,45 @@ def _get_permissions(data: dict[str, Any], location: str) -> str | None:
     if not isinstance(value, str):
         # YAML reads an unquoted 0644 as the integer 420, so an unquoted value is ambiguous
         raise SchemaError(
-            f"'permissions' must be a quoted octal string like \"0750\", got {value!r} (quote the value in YAML)",
+            f"'permissions' must be a quoted octal string like \"0750\", got {_short(value)} (quote the value in YAML)",
             location,
         )
     if not re.fullmatch(r"(0o)?[0-7]{3,4}", value):
         raise SchemaError(
-            f'\'permissions\' must be an octal string like "0750" (or "2775" with special bits), got {value!r}',
+            f'\'permissions\' must be an octal string like "0750" (or "2775" with special bits), got {_short(value)}',
             location,
         )
     return value
 
 
-def _spend(budget: list[int] | None) -> list[int]:
-    """Count one parsed node against the schema size budget (YAML aliases can expand exponentially)."""
-    budget = budget if budget is not None else [MAX_SCHEMA_NODES]
-    budget[0] -= 1
-    if budget[0] < 0:
-        raise SchemaError(f"schema has more than {MAX_SCHEMA_NODES} nodes (after expanding YAML aliases)")
-    return budget
+_REPR = reprlib.Repr()
+_REPR.maxlevel, _REPR.maxlist, _REPR.maxdict, _REPR.maxstring, _REPR.maxother = 2, 4, 4, 80, 80
+
+
+def _short(value: Any) -> str:
+    """A bounded repr for error messages (YAML aliases can make values huge)."""
+    return _REPR.repr(value)
+
+
+class _ParseState:
+    """Limits shared by a whole parse: YAML aliases can expand exponentially or refer to themselves."""
+
+    def __init__(self) -> None:
+        self.nodes_left = MAX_SCHEMA_NODES
+        self.path: set[int] = set()
+
+    def enter(self, node_data: Any, location: str) -> None:
+        self.nodes_left -= 1
+        if self.nodes_left < 0:
+            raise SchemaError(f"schema has more than {MAX_SCHEMA_NODES} nodes (after expanding YAML aliases)")
+        if id(node_data) in self.path:
+            raise SchemaError("node contains itself (recursive YAML alias)", location)
+        if len(self.path) >= MAX_SCHEMA_DEPTH:
+            raise SchemaError(f"schema is nested deeper than {MAX_SCHEMA_DEPTH} levels", location)
+        self.path.add(id(node_data))
+
+    def leave(self, node_data: Any) -> None:
+        self.path.discard(id(node_data))
 
 
 def parse_node(
@@ -183,7 +207,7 @@ def parse_node(
     is_root: bool = False,
     location: str = "",
     available_vars: set[str] | None = None,
-    _budget: list[int] | None = None,
+    _state: _ParseState | None = None,
 ) -> SchemaNode:
     """
     Recursively parse a node from YAML data.
@@ -202,10 +226,25 @@ def parse_node(
         SchemaError: If the node data is invalid
     """
     location = location or "root"
-    budget = _spend(_budget)
+    state = _state if _state is not None else _ParseState()
+    state.enter(node_data, location)
+    try:
+        return _parse_node(node_data, parent_path, is_root, location, available_vars, state)
+    finally:
+        state.leave(node_data)
+
+
+def _parse_node(
+    node_data: Any,
+    parent_path: str,
+    is_root: bool,
+    location: str,
+    available_vars: set[str] | None,
+    state: _ParseState,
+) -> SchemaNode:
     if not isinstance(node_data, dict):
         raise SchemaError(
-            f"expected a mapping describing a node, got {type(node_data).__name__}: {node_data!r}", location
+            f"expected a mapping describing a node, got {type(node_data).__name__}: {_short(node_data)}", location
         )
 
     semantical_name = node_data.get("semantical_name")
@@ -214,7 +253,7 @@ def parse_node(
             raise SchemaError("missing required key 'semantical_name'", location)
         semantical_name = "root"
     if not isinstance(semantical_name, str) or not semantical_name:
-        raise SchemaError(f"'semantical_name' must be a non-empty string, got {semantical_name!r}", location)
+        raise SchemaError(f"'semantical_name' must be a non-empty string, got {_short(semantical_name)}", location)
     location = f"{location.rsplit(' > ', 1)[0]} > {semantical_name}" if " > " in location else semantical_name
 
     raw_type = node_data.get("type")
@@ -223,7 +262,7 @@ def parse_node(
     node_type = str(raw_type).lower()
     if node_type not in NODE_TYPES:
         raise SchemaError(
-            f"invalid node type {raw_type!r}, expected one of: {', '.join(NODE_TYPES)}{_suggest(node_type, set(NODE_TYPES))}",
+            f"invalid node type {_short(raw_type)}, expected one of: {', '.join(NODE_TYPES)}{_suggest(node_type, set(NODE_TYPES))}",
             location,
         )
 
@@ -235,7 +274,7 @@ def parse_node(
     description = _get_str(node_data, "description", location)
     metadata = node_data.get("metadata")
     if metadata is not None and not isinstance(metadata, dict):
-        raise SchemaError(f"'metadata' must be a mapping, got {metadata!r}", location)
+        raise SchemaError(f"'metadata' must be a mapping, got {_short(metadata)}", location)
 
     # For root node, use parent_path directly instead of appending the name
     node_path = parent_path if is_root else f"{parent_path}/{semantical_name}"
@@ -301,7 +340,7 @@ def parse_node(
                 node_path,
                 location=f"{location} > children[{index}]",
                 available_vars=available_vars | captured,
-                _budget=budget,
+                _state=state,
             )
         )
 
@@ -325,11 +364,11 @@ def _parse_predicate(
         raise SchemaError("predicate node needs a non-empty 'elements' list of semantical names", location)
     options = node_data.get("options")
     if options is not None and not isinstance(options, dict):
-        raise SchemaError(f"'options' must be a mapping, got {options!r}", location)
+        raise SchemaError(f"'options' must be a mapping, got {_short(options)}", location)
     options = options or {}
     for key in ("key", "key_pattern"):
         if key in options and not isinstance(options[key], str):
-            raise SchemaError(f"option '{key}' must be a string, got {options[key]!r}", location)
+            raise SchemaError(f"option '{key}' must be a string, got {_short(options[key])}", location)
     if "key_pattern" in options:
         try:
             re.compile(options["key_pattern"])

@@ -597,3 +597,66 @@ def test_hidden_file_extension_message(tree):
     report = run_validation(schema, tree(".DS_Store"))
     assert messages(report)[0] == "File extension mismatch: expected .txt, got no extension"
     assert "got '.DS_Store'" in messages(report)[1]
+
+
+def test_rebalance_uses_chains_of_moves(tree):
+    """summary.csv first-fits s_csv; the only valid assignment moves it to summary and sx.csv to s_csv."""
+    schema = """
+    type: directory
+    children:
+      - {semantical_name: any_csv, type: file, extension: .csv}
+      - {semantical_name: s_csv, type: file, pattern_name: 's.*', extension: .csv, required: true}
+      - {semantical_name: summary, type: file, pattern_name: summary, extension: .csv, required: true}
+    """
+    for files in (("summary.csv", "sx.csv"), ("summary.csv", "sa.csv")):
+        report = run_validation(schema, tree(*files))
+        assert report.is_valid(), (files, messages(report))
+        assert report.stats.matches["summary"] == 1
+
+
+def test_rebalanced_entries_do_not_keep_stale_warnings(tree):
+    schema = """
+    type: directory
+    children:
+      - semantical_name: any_dir
+        type: directory
+        children:
+          - {semantical_name: readme, type: file, pattern_name: README, required: true, severity: warning}
+          - {semantical_name: f, type: file}
+      - semantical_name: special
+        type: directory
+        pattern_name: special
+        required: true
+        children: [{semantical_name: g, type: file}]
+    """
+    report = run_validation(schema, tree("x/README", "special/2"))
+    assert report.is_valid()
+    assert report.warnings == []
+    assert report.stats.entries_checked == 5
+
+
+def test_rebalance_stays_cheap_on_deep_ambiguous_schemas(tree):
+    import time
+
+    def level(depth):
+        if depth == 0:
+            return [{"semantical_name": "leaf", "type": "file"}]
+        kids = level(depth - 1)
+        return [
+            {"semantical_name": f"any{depth}", "type": "directory", "children": kids},
+            {
+                "semantical_name": f"sp{depth}",
+                "type": "directory",
+                "required": True,
+                "children": [
+                    *kids,
+                    {"semantical_name": f"m{depth}", "type": "file", "pattern_name": "marker", "required": True},
+                ],
+            },
+        ]
+
+    root = tree(*["/".join(["d"] * 6) + f"/f{i}" for i in range(200)])
+    start = time.perf_counter()
+    report = run_validation({"type": "directory", "children": level(6)}, root)
+    assert time.perf_counter() - start < 5
+    assert not report.is_valid()  # the required sp* directories are missing

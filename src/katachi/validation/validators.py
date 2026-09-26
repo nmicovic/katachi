@@ -22,7 +22,7 @@ import re
 from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from fnmatch import fnmatchcase
-from typing import Any
+from typing import Any, TypeVar
 
 from fsspec import AbstractFileSystem
 
@@ -173,6 +173,7 @@ class _Matcher:
         self._warned_unsupported: set[str] = set()
         self._has_custom_validators = bool(ValidatorRegistry.names())
         self._plans: dict[int, list[_ChildPlan]] = {}
+        self._failed: dict[tuple[int, str, tuple[tuple[str, str], ...]], _Match] = {}
 
     # -- local checks ---------------------------------------------------------------
 
@@ -315,6 +316,20 @@ class _Matcher:
     def match(self, node: SchemaNode, entry: Entry, parents: Parents, scope: Scope | None = None) -> _Match:
         """Match an entry (and, for directories, its whole subtree) against a node."""
         scope = scope if scope is not None else {}
+        if not (isinstance(node, SchemaDirectory) and node.structural_children):
+            return self._match(node, entry, parents, scope)
+        # A failure doesn't depend on the parents (they only end up in bindings): remember failed
+        # directory matches, so backtracking/rebalancing never re-evaluates the same subtree twice
+        key = (id(node), entry.path, tuple(sorted(scope.items())))
+        failed = self._failed.get(key)
+        if failed is not None:
+            return failed
+        result = self._match(node, entry, parents, scope)
+        if not result.ok:
+            self._failed[key] = result
+        return result
+
+    def _match(self, node: SchemaNode, entry: Entry, parents: Parents, scope: Scope) -> _Match:
         issues, captures = self.local_issues(node, entry, scope)
         if issues:
             return _Match(False, issues, local_failed=True)
@@ -323,8 +338,7 @@ class _Matcher:
             if _has_errors(custom):
                 return _Match(False, custom)
             issues = custom
-        if captures:
-            scope = {**scope, **captures}
+        scope = _merge(scope, captures or {})
 
         result = _Match(True, issues, [(node, entry.path, parents, scope)])
         if isinstance(node, SchemaDirectory) and node.structural_children:
@@ -355,8 +369,9 @@ class _Matcher:
         counts = [0] * len(plan)
         check_ignore = bool(node.ignore or self.ignore)
         bindings = result.bindings
-        #: (plan index, entry, first binding offset) of every entry matched by a node; used for rebalancing
-        assigned: list[tuple[int, Entry, int]] = []
+        issues = result.issues
+        #: (index, entry, bindings start/end, issues start/end) of every matched entry, to rebalance counts
+        assigned: list[tuple[int, Entry, int, int, int, int]] = []
         for child_entry in child_entries:
             if check_ignore and self._is_ignored(node, child_entry.name):
                 continue
@@ -371,21 +386,18 @@ class _Matcher:
                     if captures is None:
                         continue
                     if step.leaf:
-                        assigned.append((index, child_entry, len(bindings)))
-                        bindings.append((
-                            step.node,
-                            child_entry.path,
-                            parents,
-                            {**scope, **captures} if captures else scope,
-                        ))
+                        start = len(bindings)
+                        bindings.append((step.node, child_entry.path, parents, _merge(scope, captures)))
+                        assigned.append((index, child_entry, start, start + 1, len(issues), len(issues)))
                         counts[index] += 1
                         break
                 match = self.match(step.node, child_entry, parents, scope)
                 if match.ok:
                     counts[index] += 1
-                    assigned.append((index, child_entry, len(bindings)))
+                    b_start, i_start = len(bindings), len(issues)
                     bindings.extend(match.bindings)
-                    result.issues.extend(match.issues)
+                    issues.extend(match.issues)
+                    assigned.append((index, child_entry, b_start, len(bindings), i_start, len(issues)))
                     break
                 if not match.local_failed:
                     attempts.append((index, match))
@@ -395,12 +407,12 @@ class _Matcher:
                     # problem and still count it, so the parent doesn't also claim it is missing
                     index, best = min(attempts, key=lambda a: len(a[1].issues))
                     counts[index] += 1
-                    result.issues.extend(best.issues)
+                    issues.extend(best.issues)
                 elif not node.allow_extra:
-                    result.issues.extend(self._explain_unmatched(child_entry, node, scope))
+                    issues.extend(self._explain_unmatched(child_entry, node, scope))
 
         if any(self._count_violated(step.node, count) for step, count in zip(plan, counts, strict=True)):
-            self._rebalance(plan, counts, assigned, parents, scope, result)
+            _Rebalancer(self, plan, counts, assigned, parents, scope).run(result)
 
         for index, step in enumerate(plan):
             result.issues.extend(self._count_issues(entry, step.node, counts[index]))
@@ -408,73 +420,6 @@ class _Matcher:
     @staticmethod
     def _count_violated(node: SchemaNode, count: int) -> bool:
         return count < node.effective_min_count or (node.max_count is not None and count > node.max_count)
-
-    def _rebalance(
-        self,
-        plan: list[_ChildPlan],
-        counts: list[int],
-        assigned: list[tuple[int, Entry, int]],
-        parents: Parents,
-        scope: Scope,
-        result: _Match,
-    ) -> None:
-        """
-        Move entries between sibling nodes they both match, to satisfy ``min_count`` / ``max_count``.
-
-        First-fit assigns ``summary.csv`` to a catch-all ``*.csv`` node listed before a required
-        ``summary`` node; this gives it to ``summary`` instead, as long as the donor keeps its minimum.
-        """
-        moved: dict[int, tuple[int, list[_Binding]]] = {}  # position in `assigned` -> (new index, bindings)
-
-        def current(pos: int) -> int:
-            return moved[pos][0] if pos in moved else assigned[pos][0]
-
-        def try_move(pos: int, target: int) -> bool:
-            entry = assigned[pos][1]
-            match = self.match(plan[target].node, entry, parents, scope)
-            if not match.ok or match.issues:
-                return False
-            counts[current(pos)] -= 1
-            counts[target] += 1
-            moved[pos] = (target, match.bindings)
-            return True
-
-        def has_room(index: int) -> bool:
-            maximum = plan[index].node.max_count
-            return maximum is None or counts[index] < maximum
-
-        for target, step in enumerate(plan):
-            for pos in range(len(assigned)):
-                if counts[target] >= step.node.effective_min_count:
-                    break
-                donor = current(pos)
-                if donor != target and counts[donor] > plan[donor].node.effective_min_count:
-                    try_move(pos, target)
-        for source, step in enumerate(plan):
-            maximum = step.node.max_count
-            for pos in range(len(assigned)):
-                if maximum is None or counts[source] <= maximum:
-                    break
-                if current(pos) != source:
-                    continue
-                for target in range(len(plan)):
-                    if target != source and has_room(target) and try_move(pos, target):
-                        break
-
-        if moved:
-            result.bindings = self._rebuild_bindings(result.bindings, assigned, moved)
-
-    @staticmethod
-    def _rebuild_bindings(
-        old: list[_Binding], assigned: list[tuple[int, Entry, int]], moved: dict[int, tuple[int, list[_Binding]]]
-    ) -> list[_Binding]:
-        """Replace the bindings of moved entries, keeping everything else in order."""
-        offsets = [start for _, _, start in assigned]
-        rebuilt = old[: offsets[0]] if offsets else list(old)
-        for pos, start in enumerate(offsets):
-            end = offsets[pos + 1] if pos + 1 < len(offsets) else len(old)
-            rebuilt.extend(moved[pos][1] if pos in moved else old[start:end])
-        return rebuilt
 
     def _explain_unmatched(self, entry: Entry, parent: SchemaDirectory, scope: Scope) -> list[ValidationResult]:
         """Explain why an entry matched none of the children of its directory."""
@@ -527,6 +472,154 @@ class _Matcher:
             message = f"Expected at most {maximum}x {label} in '{entry.name}', found {count}"
             return [_issue(child, entry.path, "max_count", message, child.severity, expected=maximum, found=count)]
         return []
+
+
+class _Assignment:
+    """An entry matched by the sibling node ``index``, and the slices of bindings/issues it produced."""
+
+    __slots__ = ("b_end", "b_start", "entry", "first_index", "i_end", "i_start", "index", "replacement")
+
+    def __init__(self, index: int, entry: Entry, b_start: int, b_end: int, i_start: int, i_end: int):
+        self.index = index
+        #: first-fit index: every node listed before it already rejected this entry
+        self.first_index = index
+        self.entry = entry
+        self.b_start, self.b_end = b_start, b_end
+        self.i_start, self.i_end = i_start, i_end
+        self.replacement: _Match | None = None
+
+
+class _Rebalancer:
+    """
+    Move entries between sibling nodes they fully match, so that ``min_count`` / ``max_count`` hold.
+
+    First-fit gives ``summary.csv`` to a catch-all ``*.csv`` node listed before a required ``summary``
+    node. Counts are repaired with augmenting paths (as in bipartite matching): to fill a node, an
+    entry is taken from a sibling with a spare entry, possibly through a chain of siblings
+    (A gives to B, B gives to C) so that every intermediate node keeps its count.
+    """
+
+    def __init__(
+        self,
+        matcher: _Matcher,
+        plan: list[_ChildPlan],
+        counts: list[int],
+        assigned: list[tuple[int, Entry, int, int, int, int]],
+        parents: Parents,
+        scope: Scope,
+    ):
+        self.matcher, self.plan, self.counts = matcher, plan, counts
+        self.assigned = [_Assignment(*a) for a in assigned]
+        self.parents, self.scope = parents, scope
+        self._cache: dict[tuple[int, int], _Match | None] = {}
+
+    def _minimum(self, index: int) -> int:
+        return self.plan[index].node.effective_min_count
+
+    def _has_room(self, index: int) -> bool:
+        maximum = self.plan[index].node.max_count
+        return maximum is None or self.counts[index] < maximum
+
+    def _match(self, pos: int, target: int) -> _Match | None:
+        """The (cached) clean match of assigned entry ``pos`` against sibling ``target``, if any."""
+        key = (pos, target)
+        if key not in self._cache:
+            assignment = self.assigned[pos]
+            step = self.plan[target]
+            match: _Match | None = None
+            # Nodes before the first-fit node already rejected the entry; the prefilter is exact
+            if target > assignment.first_index and not (step.exact and step.prefilter(assignment.entry) is None):
+                checked = self.matcher.entries_checked
+                candidate = self.matcher.match(step.node, assignment.entry, self.parents, self.scope)
+                self.matcher.entries_checked = checked  # re-checking isn't checking more entries
+                match = candidate if candidate.ok else None
+            self._cache[key] = match
+        return self._cache[key]
+
+    def _donor(self, source: int, target: int, used: set[int]) -> int | None:
+        """An entry currently in ``source`` that ``target`` also matches."""
+        for pos, assignment in enumerate(self.assigned):
+            if assignment.index == source and pos not in used and self._match(pos, target) is not None:
+                return pos
+        return None
+
+    def _move(self, pos: int, target: int) -> None:
+        assignment = self.assigned[pos]
+        self.counts[assignment.index] -= 1
+        self.counts[target] += 1
+        assignment.index = target
+        assignment.replacement = self._match(pos, target)
+        # The entry's matches against other targets were computed for its original node only
+        for key in [k for k in self._cache if k[0] == pos]:
+            del self._cache[key]
+
+    def _augment(self, start: int, forward: bool) -> bool:
+        """
+        Find and apply one augmenting path.
+
+        Backward (``forward=False``): give ``start`` one more entry, taken from a node with a spare one.
+        Forward: move one entry out of ``start`` into a node with room.
+        """
+        n = len(self.plan)
+        previous: dict[int, tuple[int, int] | None] = {start: None}
+        queue = [start]
+        used: set[int] = set()
+        while queue:
+            node = queue.pop(0)
+            for other in range(n):
+                if other in previous:
+                    continue
+                source, target = (node, other) if forward else (other, node)
+                pos = self._donor(source, target, used)
+                if pos is None:
+                    continue
+                used.add(pos)
+                previous[other] = (node, pos)
+                done = self._has_room(other) if forward else self.counts[other] > self._minimum(other)
+                if done:
+                    # Apply the moves along the path, from the end back to `start`
+                    while previous[other] is not None:
+                        back, moved = previous[other]  # type: ignore[misc]
+                        self._move(moved, other if forward else back)
+                        other = back
+                    return True
+                queue.append(other)
+        return False
+
+    def run(self, result: _Match) -> None:
+        for index in range(len(self.plan)):
+            while self.counts[index] < self._minimum(index) and self._augment(index, forward=False):
+                pass
+        for index, step in enumerate(self.plan):
+            maximum = step.node.max_count
+            while maximum is not None and self.counts[index] > maximum and self._augment(index, forward=True):
+                pass
+        moved = [(a, a.replacement) for a in self.assigned if a.replacement is not None]
+        if moved:
+            result.bindings = _replace_slices(result.bindings, [(a.b_start, a.b_end, m.bindings) for a, m in moved])
+            result.issues = _replace_slices(result.issues, [(a.i_start, a.i_end, m.issues) for a, m in moved])
+
+
+T = TypeVar("T")
+
+
+def _replace_slices(items: list[T], replacements: list[tuple[int, int, list[T]]]) -> list[T]:
+    """Replace ``items[start:end]`` with the given lists (non-overlapping slices), keeping the order."""
+    out: list[T] = []
+    last = 0
+    for start, end, new in sorted(replacements, key=lambda r: r[0]):
+        out.extend(items[last:start])
+        out.extend(new)
+        last = end
+    out.extend(items[last:])
+    return out
+
+
+def _merge(scope: Scope, captures: Scope) -> Scope:
+    """Add captures to the scope; an empty (non participating) group doesn't hide an ancestor's value."""
+    if not captures:
+        return scope
+    return {**scope, **{k: v for k, v in captures.items() if v or k not in scope}}
 
 
 @contextmanager

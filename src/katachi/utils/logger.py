@@ -6,6 +6,7 @@ setup on import: its messages are disabled until ``logger.enable("katachi")`` is
 enables and configures them with :func:`set_log_level`.
 """
 
+import contextlib
 import sys
 
 from loguru import logger
@@ -16,18 +17,18 @@ _handler_id: int | None = None
 
 
 def set_log_level(level: str) -> None:
-    """Show Katachi's log messages at ``level`` and above on stderr (used by the CLI)."""
+    """Show log messages (Katachi's and plugins') at ``level`` and above on stderr; used by the CLI."""
     global _handler_id
     if _handler_id is None:
-        # The CLI owns the process: replace loguru's default handler
-        logger.remove()
+        # Replace loguru's default handler (id 0) if it is still installed; other handlers are kept
+        with contextlib.suppress(ValueError):
+            logger.remove(0)
     else:
         logger.remove(_handler_id)
     _handler_id = logger.add(
         sys.stderr,
         format="<level>{level: <8}</level> | <cyan>{name}</cyan>:<cyan>{line}</cyan> - <level>{message}</level>",
         level=level,
-        filter="katachi",
     )
     logger.enable("katachi")
 

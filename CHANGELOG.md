@@ -23,7 +23,8 @@ A large overhaul: Katachi is now CI-ready, much faster and far more expressive.
   existed were checked.
 - Owner and permission checks work again (they were lost in the fsspec migration); special bits
   (setuid/setgid/sticky) are compared only when given, e.g. `"2775"`.
-- Counts are satisfied even when a catch-all sibling is listed first (entries are rebalanced).
+- Counts are satisfied even when a catch-all sibling is listed first: entries are rebalanced between
+  siblings they match (with chains of moves when needed).
 - Names and patterns containing `[...]` are displayed literally (they were parsed as markup).
 - Importing katachi no longer reconfigures the application's loguru handlers.
 - Entries from discarded alternatives of ambiguous schemas are no longer registered, so
@@ -31,6 +32,8 @@ A large overhaul: Katachi is now CI-ready, much faster and far more expressive.
 - `--detail-report` no longer crashes when actions ran; action exceptions are reported instead of
   aborting the run.
 - The report clipping message is shown, and a stray debug print was removed.
+- Hostile schemas (YAML alias bombs, recursive aliases, extreme nesting) are rejected with a
+  schema error instead of hanging or crashing.
 - Unexpected errors during validation (e.g. remote authentication failures) are reported with
   exit code 2 instead of a traceback.
 - Azure credentials are read from `AZURE_STORAGE_ACCOUNT_NAME`/`AZURE_STORAGE_ACCOUNT` with a SAS

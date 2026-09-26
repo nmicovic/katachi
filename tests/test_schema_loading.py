@@ -193,3 +193,28 @@ def test_yaml_anchors_can_reuse_subtrees():
     """
     schema = parse_schema(yaml.safe_load(doc))
     assert [c.semantical_name for c in schema.children] == ["train", "val"]
+
+
+@pytest.mark.parametrize("key", ["description", "pattern_name", "ignore", "semantical_name"])
+def test_alias_bombs_in_values_fail_fast(key):
+    import time
+
+    lines = ["metadata:", "  a0: &a0 [x, x]"]
+    lines += [f"  a{i}: &a{i} [*a{i - 1}, *a{i - 1}]" for i in range(1, 40)]
+    lines += ["type: directory", f"{key}: *a39"]
+    data = yaml.safe_load("\n".join(lines))
+    start = time.perf_counter()
+    with pytest.raises(SchemaError) as info:
+        parse_schema(data)
+    assert time.perf_counter() - start < 2
+    assert len(str(info.value)) < 400
+
+
+def test_recursive_and_deep_schemas_are_schema_errors():
+    with pytest.raises(SchemaError, match="recursive YAML alias"):
+        parse_schema(yaml.safe_load("&n {type: directory, semantical_name: x, children: [*n]}"))
+    deep: dict = {"type": "file", "semantical_name": "leaf"}
+    for i in range(1500):
+        deep = {"type": "directory", "semantical_name": f"d{i}", "children": [deep]}
+    with pytest.raises(SchemaError, match="nested deeper than 200 levels"):
+        parse_schema(deep)
