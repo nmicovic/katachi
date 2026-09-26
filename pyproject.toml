@@ -51,7 +51,6 @@ dev = [
     "hypothesis>=6.100",
     "jsonschema>=4.23",
     "pre-commit>=4.0",
-    "tox-uv>=1.11.3",
     "deptry>=0.23.0",
     "mypy>=1.15",
     "ruff>=0.16",
