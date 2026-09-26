@@ -17,7 +17,9 @@ Validation runs in phases:
 1. **Structure.** Every entry of a directory must match one of the directory's `children`,
    tried in order. When a candidate matches by name but fails deeper down, the next candidate
    is tried (backtracking), so ambiguous siblings are fine. Afterwards every child must have been
-   matched the required number of times (`required`, `min_count`, `max_count`).
+   matched the required number of times (`required`, `min_count`, `max_count`); when a count is
+   violated, entries are moved between siblings they both match (a catch-all `*.csv` listed before
+   a required `summary.csv` doesn't steal it). Listing specific children first is still clearer.
 2. **Predicates.** Once the structure is valid, relationships such as *every image has a label*
    are checked.
 3. **Actions.** Optional Python callbacks run for matched entries (see [Extending](extending.md)).
@@ -39,7 +41,7 @@ content.
 | `name_case` | file, directory | Naming convention: `snake_case`, `kebab-case`, `camelCase`, `PascalCase`, `SCREAMING_SNAKE_CASE`, `lowercase`, `UPPERCASE` |
 | `required` | file, directory | At least one matching entry must exist in every instance of the parent (same as `min_count: 1`) |
 | `min_count` / `max_count` | file, directory | Number of matching entries allowed in every instance of the parent. `max_count: 0` forbids an entry. |
-| `permissions` | file, directory | Quoted octal permissions, e.g. `"0640"` (skipped on filesystems that don't report modes) |
+| `permissions` | file, directory | Quoted octal permissions, e.g. `"0640"`. Setuid/setgid/sticky bits are only compared when given (`"2775"`), so `"0775"` also matches a setgid directory. Skipped with a warning on filesystems that don't report modes (object stores, Windows). |
 | `owner` | file, directory | Expected owner, user name or numeric uid |
 
 ## Files
@@ -62,7 +64,7 @@ content.
 | Key | Description |
 |-----|-------------|
 | `children` | List of nodes describing the directory's entries |
-| `ignore` | Glob(s) of entry names to skip, e.g. `[".*", "__pycache__"]` |
+| `ignore` | Glob(s) of entry **names** (not paths) to skip in this directory, e.g. `[".*", "__pycache__"]` |
 | `allow_extra` | Allow entries that match no child instead of reporting them |
 
 ## Captures: reusing parts of names
@@ -164,6 +166,25 @@ Every problem has a rule name (`validator_name` in JSON output), useful to filte
 | `directory_listing` | A directory could not be read |
 | `pair_comparison`, `count_match`, `unique_keys`, ... | Predicate violations |
 | `predicate` | Unknown predicate type |
+
+## Reusing parts of a schema
+
+Standard YAML anchors and merge keys work for repeating a subtree:
+
+```yaml
+children:
+  - &split
+    semantical_name: train
+    type: directory
+    pattern_name: train
+    children:
+      - {semantical_name: image, type: file, extension: .jpg}
+  - <<: *split
+    semantical_name: val
+    pattern_name: val
+```
+
+Schemas are limited to 100,000 nodes after expanding aliases.
 
 ## Schema errors
 

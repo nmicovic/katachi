@@ -15,6 +15,9 @@ report.stats.matches  # Counter of matched entries per semantical name
 report.to_dict()  # JSON serializable
 ```
 
+Katachi logs through [loguru](https://github.com/Delgan/loguru) and, like any library, keeps
+quiet until you opt in: `from loguru import logger; logger.enable("katachi")`.
+
 `katachi.load_schema(path)` parses a schema (raising `katachi.SchemaError` with the location of
 the problem) and `katachi.parse_schema(document)` parses an already loaded document.
 

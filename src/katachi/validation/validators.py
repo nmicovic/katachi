@@ -228,14 +228,15 @@ class _Matcher:
         captures: Scope | None = None
         stems = [entry.name[: -len(e)] for e in node.extensions if entry.name.endswith(e) and len(entry.name) > len(e)]
         if node.extensions and not stems:
-            actual = f".{entry.name.rsplit('.', 1)[-1]}" if "." in entry.name else "no extension"
+            dot = entry.name.rfind(".")  # a leading dot (".DS_Store") starts a hidden name, not an extension
+            actual = entry.name[dot:] if dot > 0 else "no extension"
             expected = " or ".join(node.declared_extensions)
             issues.append(
                 _issue(
                     node, entry.path, "file_extension", f"File extension mismatch: expected {expected}, got {actual}"
                 )
             )
-            stems = [entry.name.rsplit(".", 1)[0] if "." in entry.name else entry.name]
+            stems = [entry.name[:dot] if dot > 0 else entry.name]
         elif not node.extensions:
             stems = [entry.name]
         name_issues: list[ValidationResult] = []

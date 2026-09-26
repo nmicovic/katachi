@@ -11,7 +11,8 @@ A large overhaul: Katachi is now CI-ready, much faster and far more expressive.
 - Extensions are exact and normalized: `jpg` means `.jpg` (it used to accept `xjpg`).
 - Python 3.10+ is required (3.9 is end-of-life). Azure support is an extra: `pip install "katachi[azure]"`.
 - Error messages changed (e.g. `File extension mismatch: expected .jpg, got .json`).
-- `permissions` must be a quoted string (`"0750"`): YAML reads an unquoted `0750` as a number.
+- `permissions` and `pattern_name` must be quoted strings: YAML reads an unquoted `0750` as a number.
+- `typer>=0.16` is required (older typer versions are broken with current click).
 
 ### Fixed
 
@@ -20,7 +21,11 @@ A large overhaul: Katachi is now CI-ready, much faster and far more expressive.
 - Predicates are actually evaluated: `pair_comparison` used to be a placeholder that always passed.
 - Missing entries are detected (`required`, `min_count`, `max_count`); before, only entries that
   existed were checked.
-- Owner and permission checks work again (they were lost in the fsspec migration).
+- Owner and permission checks work again (they were lost in the fsspec migration); special bits
+  (setuid/setgid/sticky) are compared only when given, e.g. `"2775"`.
+- Counts are satisfied even when a catch-all sibling is listed first (entries are rebalanced).
+- Names and patterns containing `[...]` are displayed literally (they were parsed as markup).
+- Importing katachi no longer reconfigures the application's loguru handlers.
 - Entries from discarded alternatives of ambiguous schemas are no longer registered, so
   predicates and actions only see real matches.
 - `--detail-report` no longer crashes when actions ran; action exceptions are reported instead of

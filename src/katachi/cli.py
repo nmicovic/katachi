@@ -68,6 +68,9 @@ class Template(_Choice):
     COOKIECUTTER_DATA_SCIENCE = "cookiecutter-data-science"
 
 
+TEMPLATES = tuple(t.value for t in Template)
+
+
 def _fail(message: str, title: str = "Error") -> typer.Exit:
     err_console.print(Panel(Text(message), title=title, border_style="red", expand=False))
     return typer.Exit(EXIT_ERROR)
@@ -327,6 +330,3 @@ def json_schema() -> None:
 
 if __name__ == "__main__":
     app()
-
-
-TEMPLATES = tuple(t.value for t in Template)
