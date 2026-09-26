@@ -142,13 +142,13 @@ repos:
 ```python
 import katachi
 
-report = katachi.validate("katachi.yaml", "data/")   # or s3://..., abfs://..., a dict schema
+report = katachi.validate("katachi.yaml", "data/")  # or s3://..., abfs://..., a dict schema
 if not report.is_valid():
     for problem in report.failures:
         print(problem.path, problem.validator_name, problem.message)
 
-print(report.stats.matches)        # Counter of matched entries per schema node
-print(report.to_dict())            # JSON serializable
+print(report.stats.matches)  # Counter of matched entries per schema node
+print(report.to_dict())  # JSON serializable
 ```
 
 ### Process matched files with actions
@@ -156,10 +156,12 @@ print(report.to_dict())            # JSON serializable
 ```python
 from katachi import register_action
 
+
 @register_action("image")
 def index_image(node, path, parents, context):
     day = next(p for n, p in parents if n.semantical_name == "day")
     context["index"].setdefault(day, []).append(path)
+
 
 index = {}
 report = katachi.validate("katachi.yaml", "data/", execute_actions=True, context={"index": index})
@@ -174,11 +176,13 @@ import os
 
 from katachi import ValidationResult, register_predicate, register_validator
 
+
 @register_validator("not_empty")
 def not_empty(node, path):
     if node.semantical_name == "label" and os.path.getsize(path) == 0:
         return [ValidationResult(False, "label file is empty", path, "not_empty", node.semantical_name)]
     return []
+
 
 @register_predicate("same_count")
 def same_count(predicate, dir_path, elements):

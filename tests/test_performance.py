@@ -39,7 +39,9 @@ SCHEMA = {
 
 
 def test_ten_thousand_local_files_are_fast(tmp_path):
-    root = make_tree(tmp_path / "ds", [f"day{d}/img_{i}{ext}" for d in range(20) for i in range(250) for ext in (".jpg", ".json")])
+    root = make_tree(
+        tmp_path / "ds", [f"day{d}/img_{i}{ext}" for d in range(20) for i in range(250) for ext in (".jpg", ".json")]
+    )
     start = time.perf_counter()
     report = run_validation(SCHEMA, root)
     elapsed = time.perf_counter() - start

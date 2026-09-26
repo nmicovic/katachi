@@ -12,17 +12,17 @@ inputs:
     required: false
     default: "."
   version:
-    description: Katachi version to install (default: the version of this action)
+    description: "Katachi version to install (default: the version of this action)"
     required: false
     default: ""
   extra-args:
-    description: Extra arguments for `katachi validate`, e.g. "--strict --ignore .*"
+    description: "Extra arguments for katachi validate, e.g. --strict --ignore .*"
     required: false
     default: ""
 runs:
   using: composite
   steps:
-    - uses: astral-sh/setup-uv@v6
+    - uses: astral-sh/setup-uv@v7
     - name: katachi validate
       shell: bash
       env:

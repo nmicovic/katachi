@@ -69,13 +69,16 @@ def test_file_without_declared_extension_matches_whole_name(tree):
 
 
 def test_required_child_is_reported_when_missing(tree):
-    schema = IMAGES + """
+    schema = (
+        IMAGES
+        + """
   - semantical_name: meta
     type: file
     pattern_name: meta
     extension: .json
     required: true
 """
+    )
     report = run_validation(schema, tree("img1.jpg"))
     assert rules(report) == ["min_count"]
     assert messages(report) == ["Missing required file 'meta' (meta.json) in 'root'"]
@@ -114,12 +117,15 @@ def test_counts_are_per_directory_instance(tree):
 
 
 def test_unexpected_entry_lists_candidates(tree):
-    schema = IMAGES + """
+    schema = (
+        IMAGES
+        + """
   - semantical_name: meta
     type: file
     pattern_name: meta
     extension: .json
 """
+    )
     report = run_validation(schema, tree("img1.jpg", "notes.txt"))
     assert rules(report) == ["unexpected_entry"]
     message = messages(report)[0]
@@ -316,7 +322,9 @@ def test_captured_values_are_escaped(tree):
 
 
 def test_warning_severity_does_not_fail(tree):
-    schema = IMAGES + """
+    schema = (
+        IMAGES
+        + """
   - semantical_name: readme
     type: file
     pattern_name: README
@@ -324,6 +332,7 @@ def test_warning_severity_does_not_fail(tree):
     required: true
     severity: warning
 """
+    )
     report = run_validation(schema, tree("img1.jpg"))
     assert report.is_valid()
     assert [w.validator_name for w in report.warnings] == ["min_count"]
@@ -386,26 +395,24 @@ def test_every_directory_is_listed_once():
         return original_ls(path, detail=detail, **kwargs)
 
     fs.ls = counting_ls
-    schema = parse_schema(
-        {
-            "type": "directory",
-            "children": [
-                # Two ambiguous alternatives: the second is tried for every directory
-                {
-                    "semantical_name": "png_dir",
-                    "type": "directory",
-                    "pattern_name": r"d\d",
-                    "children": [{"semantical_name": "png", "type": "file", "extension": ".png"}],
-                },
-                {
-                    "semantical_name": "jpg_dir",
-                    "type": "directory",
-                    "pattern_name": r"d\d",
-                    "children": [{"semantical_name": "jpg", "type": "file", "extension": ".jpg"}],
-                },
-            ],
-        }
-    )
+    schema = parse_schema({
+        "type": "directory",
+        "children": [
+            # Two ambiguous alternatives: the second is tried for every directory
+            {
+                "semantical_name": "png_dir",
+                "type": "directory",
+                "pattern_name": r"d\d",
+                "children": [{"semantical_name": "png", "type": "file", "extension": ".png"}],
+            },
+            {
+                "semantical_name": "jpg_dir",
+                "type": "directory",
+                "pattern_name": r"d\d",
+                "children": [{"semantical_name": "jpg", "type": "file", "extension": ".jpg"}],
+            },
+        ],
+    })
     report = SchemaValidator.validate_schema(schema, "/big", fs, workers=4)
     assert report.is_valid()
     assert sorted(calls) == sorted(set(calls))

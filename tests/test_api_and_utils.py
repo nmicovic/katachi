@@ -142,7 +142,7 @@ def test_unreadable_directory_is_reported(tree):
             str(root),
         )
     finally:
-        os.chmod(root / "locked", 0o755)
+        os.chmod(root / "locked", 0o700)
     assert [f.validator_name for f in report.failures] == ["directory_listing"]
 
 

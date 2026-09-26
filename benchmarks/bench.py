@@ -66,9 +66,9 @@ def build_tree(root: Path, dirs: int, files: int) -> int:
 
 def remote_like_fs(latency: float):
     """A local filesystem that behaves like object storage: every metadata call costs a round trip."""
-    from fsspec.implementations.local import LocalFileSystem
-
     import threading
+
+    from fsspec.implementations.local import LocalFileSystem
 
     local = threading.local()
 

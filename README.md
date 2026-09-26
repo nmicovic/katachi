@@ -7,7 +7,7 @@
 [![License](https://img.shields.io/github/license/nmicovic/katachi)](https://img.shields.io/github/license/nmicovic/katachi)
 
 <div align="center">
-  <img src="logo.png" alt="Logo" width="300"/>
+  <img src="https://raw.githubusercontent.com/nmicovic/katachi/main/logo.png" alt="Logo" width="300"/>
 </div>
 
 **Katachi** (形, *"shape"*) checks that a directory tree has the shape you expect. Describe the
@@ -46,7 +46,7 @@ Validating datasets/yolo against katachi.yaml
 - ☁️ **Any filesystem** supported by [fsspec](https://filesystem-spec.readthedocs.io): local, `s3://`,
   `abfs://`, `gs://`, `memory://`, zip archives, …
 - ⚡ **Fast**: every directory is listed once, remote directories are listed concurrently
-  (≈400× faster than v0.0.2 on high-latency storage, ≈3× locally; see [benchmarks](benchmarks/README.md))
+  (≈400× faster than v0.0.2 on high-latency storage, ≈3× locally; see [benchmarks](https://github.com/nmicovic/katachi/blob/main/benchmarks/README.md))
 - 🤖 **CI-ready**: exit codes, `--format json|github|text`, warnings vs errors, a pre-commit hook
   and a GitHub Action
 - 🧩 **Extensible** in Python: actions that process matched files, custom validators and predicates
@@ -113,7 +113,7 @@ katachi describe katachi.yaml                                      # show the sc
 `validate` exits with **0** when the tree is valid, **1** when it is not (or, with `--strict`, when
 there are warnings) and **2** for invalid schemas or arguments.
 
-See the [schema reference](docs/schema.md) for every option.
+See the [schema reference](https://nmicovic.github.io/katachi/schema/) for every option.
 
 ## Use it in CI
 
@@ -142,13 +142,13 @@ repos:
 ```python
 import katachi
 
-report = katachi.validate("katachi.yaml", "data/")   # or s3://..., abfs://..., a dict schema
+report = katachi.validate("katachi.yaml", "data/")  # or s3://..., abfs://..., a dict schema
 if not report.is_valid():
     for problem in report.failures:
         print(problem.path, problem.validator_name, problem.message)
 
-print(report.stats.matches)        # Counter of matched entries per schema node
-print(report.to_dict())            # JSON serializable
+print(report.stats.matches)  # Counter of matched entries per schema node
+print(report.to_dict())  # JSON serializable
 ```
 
 ### Process matched files with actions
@@ -156,10 +156,12 @@ print(report.to_dict())            # JSON serializable
 ```python
 from katachi import register_action
 
+
 @register_action("image")
 def index_image(node, path, parents, context):
     day = next(p for n, p in parents if n.semantical_name == "day")
     context["index"].setdefault(day, []).append(path)
+
 
 index = {}
 report = katachi.validate("katachi.yaml", "data/", execute_actions=True, context={"index": index})
@@ -174,11 +176,13 @@ import os
 
 from katachi import ValidationResult, register_predicate, register_validator
 
+
 @register_validator("not_empty")
 def not_empty(node, path):
     if node.semantical_name == "label" and os.path.getsize(path) == 0:
         return [ValidationResult(False, "label file is empty", path, "not_empty", node.semantical_name)]
     return []
+
 
 @register_predicate("same_count")
 def same_count(predicate, dir_path, elements):
@@ -187,7 +191,7 @@ def same_count(predicate, dir_path, elements):
     return [ValidationResult(ok, f"counts: {counts}", dir_path, "same_count", predicate.semantical_name)]
 ```
 
-See [extending Katachi](docs/extending.md) for details.
+See [extending Katachi](https://nmicovic.github.io/katachi/extending/) for details.
 
 ### Azure Blob Storage
 
@@ -200,8 +204,8 @@ katachi validate abfs://container/schema.yaml abfs://container/path
 
 ## Contributing
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for details.
+Contributions are welcome! See [CONTRIBUTING.md](https://github.com/nmicovic/katachi/blob/main/CONTRIBUTING.md) for details.
 
 ## License
 
-This project is licensed under the terms of the [MIT License](LICENSE).
+This project is licensed under the terms of the [MIT License](https://github.com/nmicovic/katachi/blob/main/LICENSE).

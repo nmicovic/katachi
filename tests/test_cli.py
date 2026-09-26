@@ -6,7 +6,6 @@ import json
 from pathlib import Path
 
 import pytest
-import yaml
 from typer.testing import CliRunner
 
 from katachi.cli import TEMPLATES, app
@@ -64,7 +63,11 @@ def test_bad_arguments_exit_two():
 
 def test_json_output():
     result = invoke(
-        "validate", FAILING / "simple_wrong_name_image/schema.yaml", FAILING / "simple_wrong_name_image/data", "-f", "json"
+        "validate",
+        FAILING / "simple_wrong_name_image/schema.yaml",
+        FAILING / "simple_wrong_name_image/data",
+        "-f",
+        "json",
     )
     assert result.exit_code == 1
     data = json.loads(result.output)
@@ -82,7 +85,10 @@ def test_github_and_text_output():
     assert github.output.startswith("::error file=tests/schema_falling_tests/simple_missing_image/data/meta.json")
     assert "title=katachi file_extension::File extension mismatch" in github.output
     text = invoke("validate", *args, "--format", "text")
-    assert text.output.splitlines()[0] == "meta.json: error [file_extension] File extension mismatch: expected .jpg, got .json"
+    assert (
+        text.output.splitlines()[0]
+        == "meta.json: error [file_extension] File extension mismatch: expected .jpg, got .json"
+    )
 
 
 def test_strict_turns_warnings_into_failures(tmp_path):
@@ -146,11 +152,13 @@ def test_plugin_actions_are_executed(tmp_path):
 
 def test_failing_action_exits_one(tmp_path):
     plugin = tmp_path / "boom.py"
-    plugin.write_text(
-        "from katachi import register_action\nregister_action('image_item', lambda *a: 1 / 0)\n"
-    )
+    plugin.write_text("from katachi import register_action\nregister_action('image_item', lambda *a: 1 / 0)\n")
     result = invoke(
-        "validate", FIXTURES / "test_sanity/schema.yaml", FIXTURES / "test_sanity/dataset", "-p", plugin,
+        "validate",
+        FIXTURES / "test_sanity/schema.yaml",
+        FIXTURES / "test_sanity/dataset",
+        "-p",
+        plugin,
         "--execute-actions",
     )
     assert result.exit_code == 1
