@@ -171,6 +171,8 @@ preview = true
 
 [tool.coverage.report]
 skip_empty = true
+fail_under = 88
+exclude_also = ["if TYPE_CHECKING:", "if __name__ == .__main__.:"]
 
 [tool.coverage.run]
 branch = true
