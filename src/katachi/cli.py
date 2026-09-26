@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import functools
 import json
 import time
+from collections.abc import Callable
 from enum import Enum
 from importlib import metadata, resources
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any, TypeVar
 
 import typer
 from rich.console import Console
@@ -23,6 +25,7 @@ from katachi.display.report_display import (
 )
 from katachi.display.schema_display import create_schema_tree
 from katachi.schema.importer import SchemaError
+from katachi.schema.schema_node import SchemaNode, SchemaPredicateNode
 from katachi.utils.fs_utils import get_filesystem
 from katachi.utils.logger import logger, set_log_level
 from katachi.utils.plugins import PluginError, load_plugin
@@ -70,6 +73,27 @@ def _fail(message: str, title: str = "Error") -> typer.Exit:
     return typer.Exit(EXIT_ERROR)
 
 
+F = TypeVar("F", bound=Callable[..., Any])
+
+
+def _handle_errors(func: F) -> F:
+    """Turn unexpected exceptions (network, permissions, ...) into a clear message and exit code 2."""
+
+    @functools.wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        try:
+            return func(*args, **kwargs)
+        except (typer.Exit, typer.Abort):
+            raise
+        except KeyboardInterrupt:
+            raise typer.Exit(130) from None
+        except Exception as e:
+            logger.opt(exception=e).debug("Unexpected error")
+            raise _fail(f"{type(e).__name__}: {e}\n(run with -v for details)") from e
+
+    return wrapper  # type: ignore[return-value]
+
+
 def _version_callback(value: bool) -> None:
     if value:
         try:
@@ -93,6 +117,7 @@ def main(
 
 
 @app.command()
+@_handle_errors
 def validate(
     schema_path: Annotated[
         str, typer.Argument(help="Schema file (local path or fsspec URL, e.g. abfs://c/schema.yaml).")
@@ -162,19 +187,15 @@ def validate(
         console.print(f"Validating [bold cyan]{escape(target_path)}[/] against [bold cyan]{escape(schema_path)}[/]")
 
     start = time.perf_counter()
-    try:
-        report = SchemaValidator.validate_schema(
-            schema,
-            target,
-            target_fs,
-            execute_actions=execute_actions,
-            context=context,
-            ignore=ignore or (),
-            workers=workers,
-        )
-    except Exception as e:  # e.g. authentication or network errors from remote filesystems
-        logger.opt(exception=e).debug("Validation aborted")
-        raise _fail(f"Validation aborted: {type(e).__name__}: {e}\n(run with -v for details)") from e
+    report = SchemaValidator.validate_schema(
+        schema,
+        target,
+        target_fs,
+        execute_actions=execute_actions,
+        context=context,
+        ignore=ignore or (),
+        workers=workers,
+    )
     elapsed = time.perf_counter() - start
     report.sort_by_path()
 
@@ -193,6 +214,7 @@ def validate(
 
 
 @app.command()
+@_handle_errors
 def describe(
     schema_path: Annotated[str, typer.Argument(help="Schema file (local path or fsspec URL).")],
     target_path: Annotated[str | None, typer.Argument(help="Unused, kept for backwards compatibility.")] = None,
@@ -207,7 +229,24 @@ def describe(
     )
 
 
+def _schema_warnings(schema: SchemaNode) -> list[str]:
+    """Problems that may be fine at runtime (e.g. predicates provided by a plugin) but are likely typos."""
+    from difflib import get_close_matches
+
+    from katachi.validation.predicates import PredicateRegistry
+
+    warnings = []
+    known = PredicateRegistry.names()
+    for node in schema.iter_nodes():
+        if isinstance(node, SchemaPredicateNode) and node.predicate_type not in known:
+            close = get_close_matches(node.predicate_type, known, n=1)
+            hint = f" (did you mean '{close[0]}'?)" if close else " (fine if a plugin registers it)"
+            warnings.append(f"{node.semantical_name}: unknown predicate type '{node.predicate_type}'{hint}")
+    return warnings
+
+
 @app.command("check-schema")
+@_handle_errors
 def check_schema(
     schema_paths: Annotated[list[str], typer.Argument(help="Schema files to check (local paths or fsspec URLs).")],
 ) -> None:
@@ -215,17 +254,20 @@ def check_schema(
     failed = False
     for schema_path in schema_paths:
         try:
-            load_schema_or_raise(schema_path)
+            schema = load_schema_or_raise(schema_path)
         except SchemaError as e:
             failed = True
             err_console.print(f"[red]✗[/] {escape(schema_path)}: {escape(str(e))}")
         else:
             console.print(f"[green]✓[/] {escape(schema_path)}")
+            for warning in _schema_warnings(schema):
+                err_console.print(f"  [yellow]![/] {escape(warning)}")
     if failed:
         raise typer.Exit(EXIT_INVALID)
 
 
 @app.command()
+@_handle_errors
 def infer(
     target_path: Annotated[str, typer.Argument(help="Directory to infer a schema from (local path or fsspec URL).")],
     output: Annotated[
@@ -252,6 +294,7 @@ def infer(
 
 
 @app.command()
+@_handle_errors
 def init(
     template: Annotated[Template, typer.Option("--template", "-t", help="Template to start from.")] = Template.BASIC,
     output: Annotated[Path, typer.Option("--output", "-o", help="File to create.")] = Path("katachi.yaml"),
@@ -274,6 +317,7 @@ def init(
 
 
 @app.command("json-schema")
+@_handle_errors
 def json_schema() -> None:
     """Print the JSON Schema of Katachi schema files (for editor completion)."""
     from katachi.schema.json_schema import build_json_schema

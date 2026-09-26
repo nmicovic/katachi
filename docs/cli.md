@@ -112,7 +112,7 @@ jobs:
         with:
           schema: katachi.yaml
           path: data/
-          # extra-args: --strict --ignore '.*'
+          # extra-args: --strict --ignore .*     (space separated, no quotes, no glob expansion)
 ```
 
 Problems are reported as annotations on the run. Without the action:

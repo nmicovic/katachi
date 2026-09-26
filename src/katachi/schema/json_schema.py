@@ -36,7 +36,11 @@ PROPERTIES: dict[str, dict[str, Any]] = {
         ),
     },
     "name_case": {"enum": list(NAME_CASES), "description": "Naming convention the name must follow."},
-    "permissions": {**_STR, "pattern": "^(0o|0)?[0-7]{3}$", "description": 'Octal permissions, e.g. "0750".'},
+    "permissions": {
+        **_STR,
+        "pattern": "^(0o)?[0-7]{3,4}$",
+        "description": 'Octal permissions, e.g. "0750". Special bits are only compared when given ("2775").',
+    },
     "owner": {**_STR, "description": "Expected owner (user name or numeric uid)."},
     "required": {"type": "boolean", "description": "At least one matching entry must exist (same as min_count: 1)."},
     "min_count": {**_COUNT, "description": "Minimum number of matching entries in each parent directory."},

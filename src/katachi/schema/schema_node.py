@@ -120,6 +120,17 @@ class SchemaNode(ABC):
         """Expected permission bits as an integer, parsed from the octal permissions string."""
         return int(str(self.permissions), 8) if self.permissions is not None else None
 
+    @property
+    def permissions_mask(self) -> int:
+        """
+        Bits compared by the permissions check.
+
+        Setuid/setgid/sticky bits are only compared when given explicitly ("2775"); "0775" and "775"
+        compare the permission bits only, so they also match a setgid directory.
+        """
+        digits = str(self.permissions or "").removeprefix("0o")
+        return 0o7777 if len(digits) == 4 and digits[0] != "0" else 0o777
+
     def name_matches(self, name: str) -> bool:
         """Check whether a name fully matches this node's pattern (always true when no pattern is set)."""
         return self.pattern_validation is None or self.pattern_validation.fullmatch(name) is not None

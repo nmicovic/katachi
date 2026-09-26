@@ -77,8 +77,8 @@
               },
               "permissions": {
                 "type": "string",
-                "pattern": "^(0o|0)?[0-7]{3}$",
-                "description": "Octal permissions, e.g. \"0750\"."
+                "pattern": "^(0o)?[0-7]{3,4}$",
+                "description": "Octal permissions, e.g. \"0750\". Special bits are only compared when given (\"2775\")."
               },
               "owner": {
                 "type": "string",
@@ -186,8 +186,8 @@
               },
               "permissions": {
                 "type": "string",
-                "pattern": "^(0o|0)?[0-7]{3}$",
-                "description": "Octal permissions, e.g. \"0750\"."
+                "pattern": "^(0o)?[0-7]{3,4}$",
+                "description": "Octal permissions, e.g. \"0750\". Special bits are only compared when given (\"2775\")."
               },
               "owner": {
                 "type": "string",
@@ -278,8 +278,8 @@
               },
               "permissions": {
                 "type": "string",
-                "pattern": "^(0o|0)?[0-7]{3}$",
-                "description": "Octal permissions, e.g. \"0750\"."
+                "pattern": "^(0o)?[0-7]{3,4}$",
+                "description": "Octal permissions, e.g. \"0750\". Special bits are only compared when given (\"2775\")."
               },
               "owner": {
                 "type": "string",

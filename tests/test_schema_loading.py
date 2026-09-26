@@ -162,3 +162,34 @@ def test_json_schema_rejects_typos():
             {"type": "directory", "children": [{"semantical_name": "a", "type": "file", "extention": ".jpg"}]},
             build_json_schema(),
         )
+
+
+def test_yaml_alias_bomb_is_rejected_quickly(tmp_path):
+    import time
+
+    lines = ["a0: &a0 {semantical_name: x, type: file}"]
+    for i in range(1, 25):
+        lines.append(f"a{i}: &a{i} {{semantical_name: d{i}, type: directory, children: [*a{i - 1}, *a{i - 1}]}}")
+    lines.append("schema: *a24")
+    data = yaml.safe_load("\n".join(lines))["schema"]
+    start = time.perf_counter()
+    with pytest.raises(SchemaError, match="more than 100000 nodes"):
+        parse_schema(data)
+    assert time.perf_counter() - start < 5
+
+
+def test_yaml_anchors_can_reuse_subtrees():
+    doc = """
+    type: directory
+    children:
+      - &split
+        semantical_name: train
+        type: directory
+        pattern_name: train
+        children: [{semantical_name: image, type: file, extension: .jpg}]
+      - <<: *split
+        semantical_name: val
+        pattern_name: val
+    """
+    schema = parse_schema(yaml.safe_load(doc))
+    assert [c.semantical_name for c in schema.children] == ["train", "val"]

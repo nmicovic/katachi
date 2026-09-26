@@ -82,7 +82,7 @@ def test_remote_filesystems_use_one_call_per_directory_and_prefetch_concurrently
     schema = parse_schema(SCHEMA, "/remote")
 
     start = time.perf_counter()
-    report = SchemaValidator.validate_schema(schema, "/remote", fs)
+    report = SchemaValidator.validate_schema(schema, "/remote", fs, workers=16)
     elapsed = time.perf_counter() - start
 
     assert report.is_valid()
@@ -99,3 +99,16 @@ def test_workers_can_be_disabled():
     report = SchemaValidator.validate_schema(parse_schema(SCHEMA, "/r"), "/r", fs, workers=1)
     assert report.is_valid()
     assert fsspec.filesystem("memory") is not fs
+
+
+def test_default_workers_by_protocol():
+    from types import SimpleNamespace
+
+    from fsspec.implementations.local import LocalFileSystem
+
+    from katachi.validation.snapshot import default_workers
+
+    assert default_workers(LocalFileSystem()) == 1
+    assert default_workers(MemoryFileSystem()) == 16
+    assert default_workers(SimpleNamespace(protocol=("s3", "s3a"))) == 16
+    assert default_workers(SimpleNamespace(protocol="ftp")) == 1  # single connection: not thread-safe

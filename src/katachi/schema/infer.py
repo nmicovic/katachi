@@ -13,6 +13,7 @@ is meant to be reviewed and tightened by hand.
 
 from __future__ import annotations
 
+import glob
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -98,7 +99,6 @@ class _Inferrer:
         self.max_depth = max_depth
         self.include_hidden = include_hidden
         self.used_names: set[str] = set()
-        self.hidden_seen = False
 
     def unique(self, name: str) -> str:
         candidate, i = name, 2
@@ -108,8 +108,10 @@ class _Inferrer:
         self.used_names.add(candidate)
         return candidate
 
-    def children_of(self, dirs: Sequence[Entry], depth: int) -> list[dict[str, Any]]:
+    def children_of(self, dirs: Sequence[Entry], depth: int) -> tuple[list[dict[str, Any]], list[str]]:
+        """Describe the entries of ``dirs`` (instances of one group); also returns the ignore globs they need."""
         groups: dict[tuple[bool, str, tuple[str, ...]], _Group] = {}
+        ignore: set[str] = set()
         for directory in dirs:
             try:
                 entries = self.snapshot.listdir(directory.path)
@@ -117,13 +119,15 @@ class _Inferrer:
                 continue
             for entry in entries:
                 if entry.name.startswith(".") and not self.include_hidden:
-                    self.hidden_seen = True
+                    ignore.add(".*")
                     continue
                 if entry.is_dir:
                     stem, ext = entry.name, ""
                 elif entry.is_file:
                     stem, ext = split_extension(entry.name)
                 else:
+                    # Sockets, FIFOs, dangling symlinks, ...: can't be described, so ignore them by name
+                    ignore.add(glob.escape(entry.name))
                     continue
                 key = (entry.is_dir, ext, _shape(stem))
                 group = groups.setdefault(key, _Group(entry.is_dir, ext, key[2]))
@@ -152,7 +156,9 @@ class _Inferrer:
                 node["required"] = True
             if group.is_dir:
                 if depth < self.max_depth:
-                    children = self.children_of(group.entries, depth + 1)
+                    children, child_ignore = self.children_of(group.entries, depth + 1)
+                    if child_ignore:
+                        node["ignore"] = child_ignore
                     if children:
                         node["children"] = children
             else:
@@ -160,7 +166,7 @@ class _Inferrer:
             nodes.append(node)
 
         nodes.extend(self._pair_predicates(file_nodes))
-        return nodes
+        return nodes, sorted(ignore)
 
     def _pair_predicates(self, file_nodes: list[tuple[_Group, dict[str, Any], str]]) -> list[dict[str, Any]]:
         """Group file nodes with the same stems but different extensions into pair predicates."""
@@ -204,15 +210,16 @@ def infer_schema(
     if root is None or not root.is_dir:
         raise FileNotFoundError(f"Not a directory: {path}")
     inferrer = _Inferrer(snapshot, max_depth, include_hidden)
-    inferrer.used_names.add("root")
-    children = inferrer.children_of([root], 1)
+    root_name = re.sub(r"[^0-9a-zA-Z]+", "_", root.name).strip("_").lower() or "root"
+    inferrer.used_names.add(root_name)
+    children, ignore = inferrer.children_of([root], 1)
     schema: dict[str, Any] = {
-        "semantical_name": re.sub(r"[^0-9a-zA-Z]+", "_", root.name).strip("_").lower() or "root",
+        "semantical_name": root_name,
         "type": "directory",
         "description": f"Inferred from {root.name}",
     }
-    if inferrer.hidden_seen:
-        schema["ignore"] = [".*"]
+    if ignore:
+        schema["ignore"] = ignore
     if children:
         schema["children"] = children
     return schema

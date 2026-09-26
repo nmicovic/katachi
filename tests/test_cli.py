@@ -132,7 +132,8 @@ def test_plugin_actions_are_executed(tmp_path):
         "from katachi import register_action\n"
         "@register_action('image_item')\n"
         "def record(node, path, parents, context):\n"
-        f"    open({str(out)!r}, 'a').write(context['tag'] + ':' + path.rsplit('/', 1)[-1] + '\\n')\n"
+        f"    with open({str(out)!r}, 'a') as f:\n"
+        "        f.write(context['tag'] + ':' + path.rsplit('/', 1)[-1] + '\\n')\n"
     )
     result = invoke(
         "validate",
@@ -254,7 +255,18 @@ def test_unexpected_filesystem_error_exits_two(monkeypatch):
     monkeypatch.setattr(FsSnapshot, "info", boom)
     result = invoke("validate", FIXTURES / "test_sanity/schema.yaml", FIXTURES / "test_sanity/dataset")
     assert result.exit_code == 2
-    assert "Validation aborted: RuntimeError: credentials expired" in result.output
+    assert "RuntimeError: credentials expired" in result.output
+    assert "Traceback" not in result.output
+
+
+def test_os_errors_in_every_command_exit_two(tmp_path):
+    a_file = tmp_path / "file.txt"
+    a_file.write_text("x")
+    # A path below a regular file raises NotADirectoryError
+    assert invoke("infer", a_file / "sub").exit_code == 2
+    result = invoke("validate", FIXTURES / "test_sanity/schema.yaml", a_file / "sub")
+    assert result.exit_code in (1, 2)
+    assert "Traceback" not in result.output
 
 
 def test_cli_choices_match_implementations():
@@ -270,7 +282,9 @@ def test_cli_choices_match_implementations():
 
 def test_names_and_patterns_are_not_interpreted_as_markup(tmp_path):
     schema = tmp_path / "schema.yaml"
-    schema.write_text('type: directory\nchildren:\n  - {semantical_name: img, type: file, pattern_name: "img[/_]?\\\\d+", extension: .jpg}\n')
+    schema.write_text(
+        'type: directory\nchildren:\n  - {semantical_name: img, type: file, pattern_name: "img[/_]?\\\\d+", extension: .jpg}\n'
+    )
     data = tmp_path / "[data]"
     data.mkdir()
     (data / "[draft] notes.md").touch()
@@ -282,3 +296,17 @@ def test_names_and_patterns_are_not_interpreted_as_markup(tmp_path):
     described = invoke("describe", schema)
     assert described.exit_code == 0
     assert "img[/_]?\\d+.jpg" in described.output
+
+
+def test_check_schema_warns_about_unknown_predicates(tmp_path):
+    schema = tmp_path / "katachi.yaml"
+    schema.write_text(
+        "type: directory\nchildren:\n"
+        "  - {semantical_name: a, type: file}\n"
+        "  - {semantical_name: p, type: predicate, predicate_type: pair_comparision, elements: [a]}\n"
+    )
+    result = invoke("check-schema", schema)
+    assert result.exit_code == 0
+    assert "unknown predicate type 'pair_comparision' (did you mean 'pair_comparison'?)" in " ".join(
+        result.output.split()
+    )

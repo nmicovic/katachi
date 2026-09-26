@@ -47,6 +47,10 @@ ALLOWED_KEYS: dict[str, set[str]] = {
 }
 
 
+#: Maximum number of nodes in a schema, counted after expanding YAML aliases (guards against alias bombs)
+MAX_SCHEMA_NODES = 100_000
+
+
 class SchemaError(ValueError):
     """Raised when a schema file cannot be loaded or is invalid."""
 
@@ -101,9 +105,12 @@ def _get_str_list(data: dict[str, Any], key: str, location: str) -> list[str]:
 
 def _get_pattern(data: dict[str, Any], location: str, available_vars: set[str]) -> tuple[str | None, set[str]]:
     """Validate ``pattern_name`` and return it with the named groups it captures."""
-    pattern = _get_str(data, "pattern_name", location)
+    pattern = data.get("pattern_name")
     if pattern is None:
         return None, set()
+    if not isinstance(pattern, str):
+        # e.g. an unquoted 0123 is read by YAML as the octal number 83
+        raise SchemaError(f"'pattern_name' must be a string, got {pattern!r} (quote the value in YAML)", location)
     try:
         compiled = re.compile(template_to_regex(pattern))
     except re.error as e:
@@ -117,6 +124,18 @@ def _get_pattern(data: dict[str, Any], location: str, available_vars: set[str]) 
                 location,
             )
     return pattern, set(compiled.groupindex)
+
+
+def _get_ignore(data: dict[str, Any], location: str) -> list[str]:
+    patterns = _get_str_list(data, "ignore", location)
+    for pattern in patterns:
+        if "/" in pattern or "\\" in pattern:
+            raise SchemaError(
+                f"ignore pattern {pattern!r} contains a path separator; ignore globs match entry names "
+                f"(e.g. 'build' or '*.tmp'), declare them on the directory that contains the entry",
+                location,
+            )
+    return patterns
 
 
 def _get_choice(data: dict[str, Any], key: str, choices: tuple[str, ...], location: str) -> str | None:
@@ -141,9 +160,21 @@ def _get_permissions(data: dict[str, Any], location: str) -> str | None:
             f"'permissions' must be a quoted octal string like \"0750\", got {value!r} (quote the value in YAML)",
             location,
         )
-    if not re.fullmatch(r"(0o|0)?[0-7]{3}", value):
-        raise SchemaError(f"'permissions' must be an octal string like \"0750\", got {value!r}", location)
+    if not re.fullmatch(r"(0o)?[0-7]{3,4}", value):
+        raise SchemaError(
+            f'\'permissions\' must be an octal string like "0750" (or "2775" with special bits), got {value!r}',
+            location,
+        )
     return value
+
+
+def _spend(budget: list[int] | None) -> list[int]:
+    """Count one parsed node against the schema size budget (YAML aliases can expand exponentially)."""
+    budget = budget if budget is not None else [MAX_SCHEMA_NODES]
+    budget[0] -= 1
+    if budget[0] < 0:
+        raise SchemaError(f"schema has more than {MAX_SCHEMA_NODES} nodes (after expanding YAML aliases)")
+    return budget
 
 
 def parse_node(
@@ -152,6 +183,7 @@ def parse_node(
     is_root: bool = False,
     location: str = "",
     available_vars: set[str] | None = None,
+    _budget: list[int] | None = None,
 ) -> SchemaNode:
     """
     Recursively parse a node from YAML data.
@@ -170,6 +202,7 @@ def parse_node(
         SchemaError: If the node data is invalid
     """
     location = location or "root"
+    budget = _spend(_budget)
     if not isinstance(node_data, dict):
         raise SchemaError(
             f"expected a mapping describing a node, got {type(node_data).__name__}: {node_data!r}", location
@@ -254,7 +287,7 @@ def parse_node(
         return file_node
 
     directory = SchemaDirectory(
-        ignore=_get_str_list(node_data, "ignore", location),
+        ignore=_get_ignore(node_data, location),
         allow_extra=_get_bool(node_data, "allow_extra", location),
         **common,
     )
@@ -268,6 +301,7 @@ def parse_node(
                 node_path,
                 location=f"{location} > children[{index}]",
                 available_vars=available_vars | captured,
+                _budget=budget,
             )
         )
 
@@ -292,6 +326,15 @@ def _parse_predicate(
     options = node_data.get("options")
     if options is not None and not isinstance(options, dict):
         raise SchemaError(f"'options' must be a mapping, got {options!r}", location)
+    options = options or {}
+    for key in ("key", "key_pattern"):
+        if key in options and not isinstance(options[key], str):
+            raise SchemaError(f"option '{key}' must be a string, got {options[key]!r}", location)
+    if "key_pattern" in options:
+        try:
+            re.compile(options["key_pattern"])
+        except re.error as e:
+            raise SchemaError(f"invalid regular expression in option 'key_pattern': {e}", location) from e
     return SchemaPredicateNode(
         path=node_path,
         semantical_name=semantical_name,
@@ -307,8 +350,12 @@ def _check_predicate_elements(directory: SchemaDirectory, location: str) -> None
     """Make sure every predicate only references nodes declared below the directory it lives in."""
     if not directory.predicates:
         return
-    names = {n.semantical_name for n in directory.iter_nodes() if not isinstance(n, SchemaPredicateNode)}
-    names.discard(directory.semantical_name)
+    names = {
+        n.semantical_name
+        for child in directory.children
+        for n in child.iter_nodes()
+        if not isinstance(n, SchemaPredicateNode)
+    }
     for predicate in directory.predicates:
         for element in predicate.elements:
             if element not in names:

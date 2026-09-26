@@ -33,7 +33,7 @@ from katachi.utils.logger import logger
 from katachi.validation.core import ValidationReport, ValidationResult, ValidatorRegistry
 from katachi.validation.predicates import PredicateRegistry
 from katachi.validation.registry import NodeContext, NodeRegistry
-from katachi.validation.snapshot import Entry, FsSnapshot, is_local
+from katachi.validation.snapshot import Entry, FsSnapshot, default_workers
 
 DEFAULT_REMOTE_WORKERS = 16
 
@@ -288,14 +288,15 @@ class _Matcher:
             if entry.mode is None:
                 self._warn_unsupported("permissions")
             else:
-                actual = entry.mode & 0o7777
-                if actual != expected_mode:
+                mask = node.permissions_mask
+                actual = entry.mode & mask
+                if actual != expected_mode & mask:
                     issues.append(
                         _issue(
                             node,
                             entry.path,
                             "permissions",
-                            f"Expected permissions {expected_mode:04o}, got {actual:04o}",
+                            f"Expected permissions {expected_mode & mask:04o}, got {actual:04o}",
                         )
                     )
         if node.owner is not None:
@@ -497,7 +498,7 @@ class _Matcher:
         for variant in (entry.name.lower(), entry.name.upper()):
             if variant == entry.name:
                 continue
-            probe = Entry(entry.path, variant, entry.type)
+            probe = Entry(entry.path, variant, entry.type, entry.size, entry.mode, entry.uid)
             for child in children:
                 if not self.local_issues(child, probe, scope)[0]:
                     return f"did you mean '{variant}' for {child.semantical_name}? names are case-sensitive"
@@ -506,7 +507,7 @@ class _Matcher:
             for variant in (f"{stem}.{ext.lower()}", f"{stem}.{ext.upper()}"):
                 if variant == entry.name:
                     continue
-                probe = Entry(entry.path, variant, entry.type)
+                probe = Entry(entry.path, variant, entry.type, entry.size, entry.mode, entry.uid)
                 for child in children:
                     if not self.local_issues(child, probe, scope)[0]:
                         return f"did you mean '{variant}' for {child.semantical_name}? extensions are case-sensitive"
@@ -570,7 +571,7 @@ class SchemaValidator:
             context: Additional context data passed to actions
             ignore: Glob patterns of entry names to skip everywhere (e.g. ``.DS_Store``)
             workers: Number of concurrent directory listings used to prefetch remote
-                filesystems (defaults to 1 for local and 16 for remote filesystems)
+                filesystems (defaults to 16 for object stores such as S3/GCS/Azure, 1 otherwise)
 
         Returns:
             ValidationReport with all validation results
@@ -610,9 +611,9 @@ class SchemaValidator:
         report.root_path = root.path
 
         if workers is None:
-            workers = 1 if is_local(fs) else DEFAULT_REMOTE_WORKERS
+            workers = default_workers(fs, DEFAULT_REMOTE_WORKERS)
         if isinstance(schema, SchemaDirectory) and root.is_dir:
-            snapshot.prefetch(schema, root, workers)
+            snapshot.prefetch(schema, root, workers, ignore)
 
         # Phase 1: structure
         matcher.entries_checked = 1

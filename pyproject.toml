@@ -105,6 +105,11 @@ disable_error_code = ["no-any-unimported"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+filterwarnings = [
+    "error",
+    # Older supported typer versions use click APIs deprecated in click 8.2+
+    "ignore:'click.*' is deprecated:DeprecationWarning",
+]
 
 [tool.ruff]
 target-version = "py310"

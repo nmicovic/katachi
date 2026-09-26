@@ -436,7 +436,9 @@ def test_anchored_and_lookaround_patterns_match(tree, pattern):
     """The fast path must agree with the full checks (patterns are matched against the stem)."""
     schema = {
         "type": "directory",
-        "children": [{"semantical_name": "img", "type": "file", "pattern_name": pattern, "extension": "jpg", "required": True}],
+        "children": [
+            {"semantical_name": "img", "type": "file", "pattern_name": pattern, "extension": "jpg", "required": True}
+        ],
     }
     report = run_validation(schema, tree("img1.jpg"))
     assert report.is_valid(), messages(report)
@@ -536,3 +538,52 @@ def test_optional_capture_group_substitutes_empty_string(tree):
     assert run_validation(schema, tree("run/data")).is_valid()
     assert run_validation(schema, tree("7_run/7data")).is_valid()
     assert not run_validation(schema, tree("7_run/data")).is_valid()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_permissions_special_bits(tree):
+    root = tree("shared/")
+    os.chmod(root / "shared", 0o2775)  # noqa: S103
+    schema = {
+        "type": "directory",
+        "children": [{"semantical_name": "shared", "type": "directory", "permissions": "0775"}],
+    }
+    assert run_validation(schema, root).is_valid()  # permission bits only
+    schema["children"][0]["permissions"] = "2775"
+    assert run_validation(schema, root).is_valid()
+    schema["children"][0]["permissions"] = "4775"
+    assert messages(run_validation(schema, root)) == ["Expected permissions 4775, got 2775"]
+
+
+def test_schema_parse_regressions():
+    import yaml as _yaml
+
+    from katachi.schema.importer import SchemaError
+
+    with pytest.raises(SchemaError, match="'pattern_name' must be a string"):
+        parse_schema(_yaml.safe_load("type: directory\npattern_name: 0123"))
+    with pytest.raises(SchemaError, match="invalid regular expression in option 'key_pattern'"):
+        parse_schema({
+            "type": "directory",
+            "children": [
+                {"semantical_name": "a", "type": "file"},
+                {
+                    "semantical_name": "p",
+                    "type": "predicate",
+                    "predicate_type": "pair_comparison",
+                    "elements": ["a"],
+                    "options": {"key_pattern": "(["},
+                },
+            ],
+        })
+    with pytest.raises(SchemaError, match="contains a path separator"):
+        parse_schema({"type": "directory", "ignore": ["build/"]})
+    # A child may share its parent's semantical name and still be a predicate element
+    parse_schema({
+        "semantical_name": "a",
+        "type": "directory",
+        "children": [
+            {"semantical_name": "a", "type": "file", "extension": ".txt"},
+            {"semantical_name": "p", "type": "predicate", "predicate_type": "count_match", "elements": ["a"]},
+        ],
+    })

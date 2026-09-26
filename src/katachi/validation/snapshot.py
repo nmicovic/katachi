@@ -12,14 +12,17 @@ from __future__ import annotations
 
 import os
 import threading
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from fnmatch import fnmatchcase
 from typing import Any
 
 from fsspec import AbstractFileSystem
 
 from katachi.schema.schema_node import SchemaDirectory
 from katachi.utils.logger import logger
+
+_WINDOWS = os.name == "nt"
 
 
 class Entry:
@@ -57,7 +60,9 @@ class Entry:
                 st = source.stat()
             except OSError:
                 return
-            self._size, self._mode, self._uid = st.st_size, st.st_mode, st.st_uid
+            self._size = st.st_size
+            if not _WINDOWS:  # Windows doesn't have POSIX modes/owners: report them as unsupported
+                self._mode, self._uid = st.st_mode, st.st_uid
 
     @property
     def size(self) -> int | None:
@@ -88,7 +93,7 @@ class Entry:
     @classmethod
     def from_info(cls, info: dict[str, Any]) -> Entry:
         path = str(info["name"])
-        if len(path) > 1:
+        if len(path) > 1 and not path.endswith(":/"):  # keep "/" and Windows drive roots ("C:/")
             path = path.rstrip("/")
         name = path.rsplit("/", 1)[-1] or path
         size = info.get("size")
@@ -121,10 +126,42 @@ def _scandir(path: str) -> list[Entry]:
     return entries
 
 
+#: Protocols whose fsspec implementations are safe (and useful) to list concurrently from threads
+CONCURRENT_PROTOCOLS = frozenset({
+    "s3",
+    "s3a",
+    "gs",
+    "gcs",
+    "abfs",
+    "abfss",
+    "az",
+    "adl",
+    "http",
+    "https",
+    "hf",
+    "memory",
+    "oci",
+    "r2",
+})
+
+
+def _protocols(fs: AbstractFileSystem) -> tuple[str, ...]:
+    return (fs.protocol,) if isinstance(fs.protocol, str) else tuple(fs.protocol)
+
+
 def is_local(fs: AbstractFileSystem) -> bool:
     """Check whether a filesystem is the local filesystem."""
-    protocol = fs.protocol if isinstance(fs.protocol, str) else fs.protocol[0]
-    return protocol in ("file", "local")
+    return any(p in ("file", "local") for p in _protocols(fs))
+
+
+def default_workers(fs: AbstractFileSystem, remote_workers: int = 16) -> int:
+    """
+    Concurrent directory listings to use by default.
+
+    Object stores benefit a lot from concurrent listings; local disks don't, and single-connection
+    protocols (ftp, sftp, smb, ...) are not safe to use from several threads.
+    """
+    return remote_workers if any(p in CONCURRENT_PROTOCOLS for p in _protocols(fs)) else 1
 
 
 class FsSnapshot:
@@ -145,7 +182,7 @@ class FsSnapshot:
         """Return the entry for a path, or None if it does not exist."""
         try:
             return Entry.from_info(self.fs.info(path))
-        except FileNotFoundError:
+        except (FileNotFoundError, NotADirectoryError):
             return None
 
     def _fetch(self, path: str) -> list[Entry]:
@@ -185,7 +222,7 @@ class FsSnapshot:
             self._listings[path] = entries
         return entries
 
-    def prefetch(self, schema: SchemaDirectory, root: Entry, workers: int) -> None:
+    def prefetch(self, schema: SchemaDirectory, root: Entry, workers: int, ignore: Sequence[str] = ()) -> None:
         """
         Concurrently list every directory the schema could descend into, level by level.
 
@@ -203,6 +240,8 @@ class FsSnapshot:
                     for child in future.result():
                         if not child.is_dir:
                             continue
+                        if any(fnmatchcase(child.name, pattern) for pattern in ignore):
+                            continue
                         child_candidates = list(_descendable(candidates, child.name))
                         if child_candidates:
                             next_level.append((child, child_candidates))
@@ -210,10 +249,18 @@ class FsSnapshot:
         logger.debug(f"Prefetched {self.directories_listed} directory listings with {workers} workers")
 
     def _safe_list(self, path: str) -> list[Entry]:
+        """Best-effort listing for prefetching: errors are not cached, validation retries and reports them."""
+        with self._lock:
+            cached = self._listings.get(path)
+        if cached is not None:
+            return cached
         try:
-            return self.listdir(path)
-        except OSError:
+            entries = self._fetch(path)
+        except Exception:
             return []
+        with self._lock:
+            self._listings[path] = entries
+        return entries
 
 
 def _descendable(candidates: Iterable[SchemaDirectory], name: str) -> Iterable[SchemaDirectory]:

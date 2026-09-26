@@ -16,7 +16,7 @@ inputs:
     required: false
     default: ""
   extra-args:
-    description: "Extra arguments for katachi validate, e.g. --strict --ignore .*"
+    description: "Extra arguments for katachi validate, separated by spaces and not quoted, e.g. --strict --ignore .*"
     required: false
     default: ""
 runs:
@@ -32,5 +32,7 @@ runs:
         KATACHI_EXTRA_ARGS: ${{ inputs.extra-args }}
       run: |
         if [ -n "$KATACHI_VERSION" ]; then spec="katachi==$KATACHI_VERSION"; else spec="$GITHUB_ACTION_PATH"; fi
-        # shellcheck disable=SC2086
-        uvx --from "$spec" katachi validate "$KATACHI_SCHEMA" "$KATACHI_PATH" --format github $KATACHI_EXTRA_ARGS
+        # Split extra-args on whitespace without glob expansion (so `--ignore .*` stays a pattern)
+        set -f
+        read -r -a extra_args <<< "$KATACHI_EXTRA_ARGS"
+        uvx --from "$spec" katachi validate "$KATACHI_SCHEMA" "$KATACHI_PATH" --format github "${extra_args[@]}"
