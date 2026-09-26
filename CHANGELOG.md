@@ -26,6 +26,8 @@ A large overhaul: Katachi is now CI-ready, much faster and far more expressive.
 - `--detail-report` no longer crashes when actions ran; action exceptions are reported instead of
   aborting the run.
 - The report clipping message is shown, and a stray debug print was removed.
+- Unexpected errors during validation (e.g. remote authentication failures) are reported with
+  exit code 2 instead of a traceback.
 - Azure credentials are read from `AZURE_STORAGE_ACCOUNT_NAME`/`AZURE_STORAGE_ACCOUNT` with a SAS
   token, account key or connection string, as documented.
 
@@ -43,10 +45,11 @@ A large overhaul: Katachi is now CI-ready, much faster and far more expressive.
 - Any fsspec filesystem (`s3://`, `gs://`, `memory://`, ...), with helpful errors for missing packages.
 - Top level Python API: `katachi.validate()`, `katachi.load_schema()`, `register_action`,
   `register_validator`, `register_predicate`; typed package (`py.typed`).
-- pre-commit hooks and a GitHub Action.
+- pre-commit hooks, a GitHub Action and a Docker image definition.
+- Tested on Linux, Windows and macOS, and against the lowest supported dependency versions.
 
 ### Performance
 
 Every directory is listed once (remote directories concurrently), local listings avoid `stat`
 calls, and matching uses an exact regex prefilter: ~3× faster locally and ~400× faster on
-high-latency storage than 0.0.2. See [benchmarks](benchmarks/README.md).
+high-latency storage than 0.0.2. See [benchmarks](https://github.com/nmicovic/katachi/blob/main/benchmarks/README.md).
