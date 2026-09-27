@@ -180,6 +180,9 @@ class FsSnapshot:
 
     def info(self, path: str) -> Entry | None:
         """Return the entry for a path, or None if it does not exist."""
+        if not self._local:
+            # Remote implementations cache listings on the (shared) filesystem instance
+            self.fs.invalidate_cache(path)
         try:
             return Entry.from_info(self.fs.info(path))
         except (FileNotFoundError, NotADirectoryError):
@@ -190,7 +193,12 @@ class FsSnapshot:
             entries = _scandir(path)
             entries.sort(key=lambda e: e.name)
             return entries
-        raw = self.fs.ls(path, detail=True)
+        try:
+            # Always read a fresh listing: s3fs, gcsfs, adlfs, ... cache listings on filesystem
+            # instances that fsspec reuses, so a second validation could otherwise see stale data
+            raw = self.fs.ls(path, detail=True, refresh=True)
+        except TypeError:  # implementations whose ls() doesn't accept extra arguments
+            raw = self.fs.ls(path, detail=True)
         entries = []
         for info in raw:
             entry = Entry.from_info(info)
