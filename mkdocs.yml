@@ -11,6 +11,7 @@ nav:
   - Home: index.md
   - Schema reference: schema.md
   - Command line & CI: cli.md
+  - Remote storage: remote.md
   - Python API & extending: extending.md
   - Performance: performance.md
   - API reference: modules.md

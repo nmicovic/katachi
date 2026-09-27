@@ -50,7 +50,9 @@ A large overhaul: Katachi is now CI-ready, much faster and far more expressive.
 - CLI: `--format json|text|github`, `--strict`, `--ignore`, `--plugin`, `--workers`, `--version`,
   `-v`; new `infer`, `init` (templates: basic, yolo, imagefolder, cookiecutter-data-science),
   `check-schema` and `json-schema` commands; compact `describe` tree; case-mismatch hints.
-- Any fsspec filesystem (`s3://`, `gs://`, `memory://`, ...), with helpful errors for missing packages.
+- Any fsspec filesystem (`s3://`, `gs://`, `memory://`, ...), with helpful errors for missing packages;
+  listings are always fresh (the storage libraries' listing caches are bypassed), and S3 support is
+  tested against a local S3 API in CI.
 - Top level Python API: `katachi.validate()`, `katachi.load_schema()`, `register_action`,
   `register_validator`, `register_predicate`; typed package (`py.typed`).
 - pre-commit hooks, a GitHub Action and a Docker image definition.

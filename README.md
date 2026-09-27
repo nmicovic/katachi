@@ -193,14 +193,17 @@ def same_count(predicate, dir_path, elements):
 
 See [extending Katachi](https://nmicovic.github.io/katachi/extending/) for details.
 
-### Azure Blob Storage
+### Remote storage (S3, Azure, GCS, ...)
 
 ```bash
-pip install "katachi[azure]"
-export AZURE_STORAGE_ACCOUNT_NAME="your_storage_account"
-export AZURE_STORAGE_SAS_TOKEN="your_sas_token"      # or AZURE_STORAGE_ACCOUNT_KEY / AZURE_STORAGE_CONNECTION_STRING
-katachi validate abfs://container/schema.yaml abfs://container/path
+pip install katachi s3fs                     # or "katachi[azure]", gcsfs, ...
+katachi validate katachi.yaml s3://my-bucket/datasets/2025
 ```
+
+Credentials come from the storage library's usual configuration (AWS profiles and environment
+variables, `AZURE_STORAGE_*`, Google Application Default Credentials). See
+[remote storage](https://nmicovic.github.io/katachi/remote/) for details and how object stores differ
+from disks (for example, an empty directory can't exist on S3).
 
 ## Contributing
 
