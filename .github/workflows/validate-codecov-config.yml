@@ -6,9 +6,19 @@ on:
   push:
     branches: [main]
 
+permissions:
+  contents: read
+
+# A new push to a PR cancels the run it replaces; pushes to main each get their own run.
+concurrency:
+  group: codecov-config-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   validate-codecov-config:
-    runs-on: ubuntu-22.04
+    # Owner/collaborator runs go to the self-hosted visas runner; fork PRs (public repo) stay on GitHub-hosted runners.
+    runs-on: ${{ github.event.pull_request.head.repo.fork && 'ubuntu-latest' || fromJSON('["self-hosted","visas"]') }}
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
       - name: Validate codecov configuration
